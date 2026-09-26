@@ -1,0 +1,4 @@
+Sentiment,Comments,Average_Polarity,Percentage
+Negative,8250,-0.22400517097343406,22.42
+Neutral,12772,-0.0008073431792309023,34.71
+Positive,15771,0.25534696894109044,42.86

@@ -1,0 +1,4 @@
+Sentiment,Comments,Average_Polarity
+Positive,15771,0.255
+Neutral,12772,-0.001
+Negative,8250,-0.224
