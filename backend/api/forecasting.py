@@ -1,132 +1,246 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Query, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+import pandas as pd
+import numpy as np
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 from ..database.database import get_db
 from ..database.models import SocialPost
 
-router = APIRouter(prefix="/api", tags=["Forecasting"])
+router = APIRouter(
+    prefix="/api",
+    tags=["Forecasting"]
+)
 
 
 @router.get("/monthly-trends")
-def get_monthly_trends(db: Session = Depends(get_db)):
+def monthly_trends(db: Session = Depends(get_db)):
 
-    results = (
-        db.query(
-            SocialPost.post_year,
-            SocialPost.post_month,
-            func.count(SocialPost.id).label("post_count"),
-            func.sum(SocialPost.views).label("total_views"),
-            func.avg(SocialPost.views).label("avg_views"),
-            func.avg(SocialPost.likes).label("avg_likes"),
-            func.avg(SocialPost.shares).label("avg_shares"),
-            func.avg(SocialPost.comments).label("avg_comments")
-        )
-        .group_by(
-            SocialPost.post_year,
-            SocialPost.post_month
-        )
-        .order_by(
-            SocialPost.post_year,
-            SocialPost.post_month
-        )
-        .all()
+    posts = db.query(SocialPost).all()
+
+    if not posts:
+        return []
+
+    data = pd.DataFrame([
+        {
+            "post_date": post.post_date,
+            "virality_score": post.virality_score
+        }
+        for post in posts
+    ])
+
+    data["post_date"] = pd.to_datetime(data["post_date"])
+
+    data["month"] = (
+        data["post_date"]
+        .dt.to_period("M")
+        .dt.to_timestamp()
     )
 
-    return [
-        {
-            "year": row.post_year,
-            "month": row.post_month,
-            "post_count": row.post_count,
-            "total_views": row.total_views,
-            "avg_views": round(row.avg_views or 0, 2),
-            "avg_likes": round(row.avg_likes or 0, 2),
-            "avg_shares": round(row.avg_shares or 0, 2),
-            "avg_comments": round(row.avg_comments or 0, 2)
-        }
-        for row in results
-    ]
+    monthly = (
+        data.groupby("month")
+        .agg(
+            post_count=("virality_score", "count"),
+            median_virality=("virality_score", "median")
+        )
+        .reset_index()
+    )
 
-from statistics import median
+    monthly["month"] = monthly["month"].dt.strftime("%Y-%m")
 
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    return monthly.to_dict(orient="records")
 
 
 @router.get("/virality-forecast")
-def get_virality_forecast(
-    months: int = 6,
+def virality_forecast(
+    months: int = Query(
+        6,
+        ge=1,
+        le=12
+    ),
     db: Session = Depends(get_db)
 ):
-    posts = (
-        db.query(SocialPost)
-        .order_by(
-            SocialPost.post_year,
-            SocialPost.post_month
-        )
-        .all()
-    )
+
+    posts = db.query(SocialPost).all()
 
     if not posts:
+
         return {
-            "message": "No data available",
-            "forecast": []
+            "historical_months": [],
+            "historical_virality": [],
+            "forecast_months": [],
+            "forecast": [],
+            "model": "Holt Exponential Smoothing",
+            "mae": None,
+            "rmse": None
         }
 
-    monthly_data = {}
+    data = pd.DataFrame([
+        {
+            "post_date": post.post_date,
+            "virality_score": post.virality_score
+        }
+        for post in posts
+    ])
 
-    for post in posts:
-        key = (post.post_year, post.post_month)
+    data["post_date"] = pd.to_datetime(
+        data["post_date"]
+    )
 
-        if key not in monthly_data:
-            monthly_data[key] = []
+    data["month"] = (
+        data["post_date"]
+        .dt.to_period("M")
+        .dt.to_timestamp()
+    )
 
-        monthly_data[key].append(post.virality_score)
+    monthly = (
+        data.groupby("month")["virality_score"]
+        .median()
+        .sort_index()
+    )
 
-    dates = []
-    values = []
+    monthly = monthly.asfreq("MS")
 
-    for (year, month), scores in sorted(monthly_data.items()):
-        dates.append(f"{year}-{month:02d}")
-        values.append(median(scores))
+    monthly = monthly.interpolate(
+        method="linear"
+    )
 
-    if len(values) < 6:
+    if len(monthly) < 12:
+
         return {
-            "message": "Not enough historical data for forecasting",
-            "forecast": []
+            "historical_months": [
+                x.strftime("%Y-%m")
+                for x in monthly.index
+            ],
+            "historical_virality": [
+                round(float(x), 2)
+                for x in monthly.values
+            ],
+            "forecast_months": [],
+            "forecast": [],
+            "model": "Holt Exponential Smoothing",
+            "mae": None,
+            "rmse": None,
+            "message": "At least 12 months of historical data are required."
         }
 
-    model = ExponentialSmoothing(
-        values,
+    # --------------------------------
+    # Train / test split
+    # --------------------------------
+
+    train_size = int(
+        len(monthly) * 0.8
+    )
+
+    train = monthly.iloc[:train_size]
+
+    test = monthly.iloc[train_size:]
+
+    # --------------------------------
+    # Validation model
+    # --------------------------------
+
+    validation_model = ExponentialSmoothing(
+        train,
         trend="add",
         damped_trend=True,
+        seasonal=None,
         initialization_method="estimated"
     )
 
-    fitted_model = model.fit()
+    validation_fit = validation_model.fit(
+        optimized=True
+    )
 
-    forecast_values = fitted_model.forecast(months)
+    test_prediction = validation_fit.forecast(
+        len(test)
+    )
 
-    forecast = []
+    mae = float(
+        np.mean(
+            np.abs(
+                test.values -
+                test_prediction.values
+            )
+        )
+    )
 
-    last_year, last_month = sorted(monthly_data.keys())[-1]
+    rmse = float(
+        np.sqrt(
+            np.mean(
+                (
+                    test.values -
+                    test_prediction.values
+                ) ** 2
+            )
+        )
+    )
 
-    for i, value in enumerate(forecast_values, start=1):
+    # --------------------------------
+    # Final model
+    # --------------------------------
 
-        forecast_month = last_month + i
-        forecast_year = last_year
+    final_model = ExponentialSmoothing(
+        monthly,
+        trend="add",
+        damped_trend=True,
+        seasonal=None,
+        initialization_method="estimated"
+    )
 
-        while forecast_month > 12:
-            forecast_month -= 12
-            forecast_year += 1
+    final_fit = final_model.fit(
+        optimized=True
+    )
 
-        forecast.append({
-            "year": forecast_year,
-            "month": forecast_month,
-            "predicted_virality": round(float(value), 2)
-        })
+    future_prediction = final_fit.forecast(
+        months
+    )
+
+    future_prediction = np.maximum(
+        future_prediction,
+        0
+    )
+
+    # --------------------------------
+    # Historical data
+    # --------------------------------
+
+    historical_months = [
+        x.strftime("%Y-%m")
+        for x in monthly.index
+    ]
+
+    historical_virality = [
+        round(float(x), 2)
+        for x in monthly.values
+    ]
+
+    # --------------------------------
+    # Future data
+    # --------------------------------
+
+    forecast_months = [
+        x.strftime("%Y-%m")
+        for x in future_prediction.index
+    ]
+
+    forecast_values = [
+        round(float(x), 2)
+        for x in future_prediction.values
+    ]
+
+    # --------------------------------
+    # Response
+    # --------------------------------
 
     return {
-        "historical_months": len(values),
-        "forecast_months": months,
-        "forecast": forecast
+        "historical_months": historical_months,
+        "historical_virality": historical_virality,
+        "forecast_months": forecast_months,
+        "forecast": forecast_values,
+        "model": "Holt Exponential Smoothing",
+        "training_months": len(train),
+        "testing_months": len(test),
+        "mae": round(mae, 4),
+        "rmse": round(rmse, 4)
     }

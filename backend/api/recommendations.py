@@ -1,10 +1,15 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from ..database.database import get_db
 from ..database.models import SocialPost
 
-router = APIRouter(prefix="/api", tags=["Recommendations"])
+
+router = APIRouter(
+    prefix="/api",
+    tags=["Recommendations"]
+)
 
 
 @router.get("/recommendations")
@@ -13,63 +18,93 @@ def get_recommendations(
     region: str | None = None,
     db: Session = Depends(get_db)
 ):
+
     query = db.query(SocialPost)
 
-    if platform:
-        query = query.filter(SocialPost.platform == platform)
+    # Platform filter
+    if platform and platform.lower() != "all":
+        query = query.filter(
+            func.lower(SocialPost.platform) == platform.lower()
+        )
 
-    if region:
-        query = query.filter(SocialPost.region == region)
+    # Region filter
+    if region and region.lower() != "all":
+        query = query.filter(
+            func.lower(SocialPost.region) == region.lower()
+        )
 
     posts = query.all()
 
     if not posts:
         return []
 
-    from collections import defaultdict
-    from statistics import median
-
-    groups = defaultdict(list)
+    groups = {}
 
     for post in posts:
-        key = (post.content_type, post.hashtag)
-        groups[key].append(post)
+
+        key = (
+            post.content_type,
+            post.hashtag
+        )
+
+        if key not in groups:
+
+            groups[key] = {
+                "content_type": post.content_type,
+                "hashtag": post.hashtag,
+                "virality": [],
+                "engagement": [],
+                "shares": []
+            }
+
+        groups[key]["virality"].append(
+            post.virality_score
+        )
+
+        groups[key]["engagement"].append(
+            post.engagement_rate
+        )
+
+        groups[key]["shares"].append(
+            post.shares
+        )
 
     recommendations = []
 
-    for (content_type, hashtag), group in groups.items():
+    for key, group in groups.items():
 
-        if len(group) < 5:
+        post_count = len(group["virality"])
+
+        if post_count < 5:
             continue
 
-        virality_scores = [
-            post.virality_score
-            for post in group
-            if post.virality_score is not None
-        ]
-
-        engagement_rates = [
-            post.engagement_rate
-            for post in group
-            if post.engagement_rate is not None
-        ]
-
-        avg_shares = (
-            sum(post.shares for post in group) / len(group)
+        recommendations.append(
+            {
+                "content_type": group["content_type"],
+                "hashtag": group["hashtag"],
+                "posts": post_count,
+                "median_virality": round(
+                    float(
+                        __import__("statistics").median(
+                            group["virality"]
+                        )
+                    ),
+                    2
+                ),
+                "median_engagement": round(
+                    float(
+                        __import__("statistics").median(
+                            group["engagement"]
+                        )
+                    ),
+                    2
+                ),
+                "avg_shares": round(
+                    sum(group["shares"]) / len(group["shares"]),
+                    2
+                )
+            }
         )
-
-        recommendations.append({
-            "content_type": content_type,
-            "hashtag": hashtag,
-            "posts": len(group),
-            "median_virality": round(
-                median(virality_scores), 2
-            ),
-            "median_engagement": round(
-                median(engagement_rates), 2
-            ),
-            "avg_shares": round(avg_shares, 2)
-        })
 
     recommendations.sort(
         key=lambda x: (

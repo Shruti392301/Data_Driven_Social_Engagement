@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 
@@ -7,6 +11,7 @@ from .services.data_loader import load_all_data
 from .api.analytics import router as analytics_router
 from .api.forecasting import router as forecasting_router
 from .api.recommendations import router as recommendations_router
+from .api.post_analyzer import router as post_analyzer_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -21,6 +26,7 @@ app = FastAPI(
 app.include_router(analytics_router)
 app.include_router(forecasting_router)
 app.include_router(recommendations_router)
+app.include_router(post_analyzer_router)
 
 @app.get("/")
 def root():
