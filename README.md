@@ -1,6 +1,12 @@
 # 📊 Data-Driven Social Engagement Dashboard
 
-A Python-based data analytics and machine learning project that analyzes social media performance, engagement, virality, audience sentiment, content patterns, and future trends through an interactive Streamlit dashboard.
+# SocialPulse
+
+### A Data-Driven Social Media Engagement Intelligence System
+
+**SocialPulse** represents the pulse of social media. It analyzes engagement, virality, audience sentiment, trends, and content performance to understand what is happening across social media platforms.
+
+The system provides data-driven insights through analytics, recommendations, and forecasting to help understand which content performs well and how social media trends evolve over time.
 
 ## 🎯 Objectives
 
