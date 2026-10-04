@@ -154,20 +154,36 @@ def get_youtube_metrics(video_id):
             )
         )
 
-    response = requests.get(
-        "https://www.googleapis.com/youtube/v3/videos",
-        params={
-            "part": "snippet,statistics",
-            "id": video_id,
-            "key": api_key
-        },
-        timeout=15
-    )
-
-    if response.status_code != 200:
+    try:
+        response = requests.get(
+            "https://www.googleapis.com/youtube/v3/videos",
+            params={
+                "part": "snippet,statistics",
+                "id": video_id,
+                "key": api_key
+            },
+            timeout=15
+        )
+    except requests.RequestException as e:
         raise HTTPException(
             status_code=502,
-            detail="YouTube API request failed."
+            detail=f"Could not connect to YouTube API: {str(e)}"
+        )
+
+    if response.status_code != 200:
+        try:
+            error_data = response.json()
+            error_message = (
+                error_data
+                .get("error", {})
+                .get("message", "Unknown YouTube API error.")
+            )
+        except Exception:
+            error_message = response.text
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"YouTube API error: {error_message}"
         )
 
     data = response.json()
@@ -175,7 +191,10 @@ def get_youtube_metrics(video_id):
     if not data.get("items"):
         raise HTTPException(
             status_code=404,
-            detail="YouTube video was not found."
+            detail=(
+                f"YouTube video '{video_id}' was not found, "
+                "is unavailable, or cannot be accessed."
+            )
         )
 
     video = data["items"][0]
@@ -183,28 +202,111 @@ def get_youtube_metrics(video_id):
     statistics = video.get("statistics", {})
     snippet = video.get("snippet", {})
 
-    views = int(
-        statistics.get("viewCount", 0)
-    )
-
-    likes = int(
-        statistics.get("likeCount", 0)
-    )
-
-    comments = int(
-        statistics.get("commentCount", 0)
-    )
-
     return {
-        "views": views,
-        "likes": likes,
+        "views": int(statistics.get("viewCount", 0)),
+        "likes": int(statistics.get("likeCount", 0)),
         "shares": 0,
-        "comments": comments,
+        "comments": int(statistics.get("commentCount", 0)),
         "title": snippet.get("title"),
         "published_at": snippet.get("publishedAt")
     }
 
+# ============================================================
+# INSTAGRAM API
+# ============================================================
 
+def normalize_instagram_url(url):
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+
+    return f"https://www.instagram.com{path}/"
+
+
+def get_instagram_metrics(url):
+    access_token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
+
+    if not access_token:
+        return {
+            "status": "not_configured",
+            "message": (
+                "Instagram API access is not configured."
+            )
+        }
+
+    normalized_url = normalize_instagram_url(url)
+
+    try:
+        response = requests.get(
+            "https://graph.instagram.com/me/media",
+            params={
+                "fields": (
+                    "id,"
+                    "caption,"
+                    "media_type,"
+                    "permalink,"
+                    "timestamp,"
+                    "like_count,"
+                    "comments_count"
+                ),
+                "limit": 50,
+                "access_token": access_token
+            },
+            timeout=15
+        )
+
+    except requests.RequestException:
+        return {
+            "status": "not_accessible",
+            "message": (
+                "Instagram could not be reached. "
+                "Please try again later."
+            )
+        }
+
+    if response.status_code != 200:
+        return {
+            "status": "not_accessible",
+            "message": (
+                "This Instagram post could not be accessed "
+                "through the connected Instagram API."
+            )
+        }
+
+    data = response.json()
+
+    for media in data.get("data", []):
+
+        permalink = media.get("permalink")
+
+        if not permalink:
+            continue
+
+        if normalize_instagram_url(permalink) == normalized_url:
+
+            return {
+                "status": "accessible",
+                "views": 0,
+                "likes": int(
+                    media.get("like_count", 0) or 0
+                ),
+                "shares": 0,
+                "comments": int(
+                    media.get("comments_count", 0) or 0
+                ),
+                "title": media.get("caption"),
+                "published_at": media.get("timestamp"),
+                "media_id": media.get("id"),
+                "media_type": media.get("media_type")
+            }
+
+    return {
+        "status": "not_accessible",
+        "message": (
+            "This Instagram post is valid and public, "
+            "but its engagement metrics are not available "
+            "through the connected Instagram API."
+        )
+    }
 # ============================================================
 # TIKTOK API
 # ============================================================
@@ -250,7 +352,9 @@ def get_tiktok_metrics(video_id):
 
     data = response.json()
 
-    videos = data.get("data", {}).get(
+    videos = data.get(
+        "data", {}
+    ).get(
         "videos",
         []
     )
@@ -390,7 +494,8 @@ def analyze_post(
             status_code=400,
             detail=(
                 "Unsupported platform. "
-                "Currently supported: YouTube and TikTok."
+                "Currently supported: "
+                "YouTube, TikTok and Instagram."
             )
         )
 
@@ -399,18 +504,23 @@ def analyze_post(
     # --------------------------------------------------------
 
     if platform == "YouTube":
+
         post_id = extract_youtube_id(url)
 
     elif platform == "TikTok":
+
         post_id = extract_tiktok_id(url)
 
     elif platform == "Instagram":
+
         post_id = extract_instagram_id(url)
 
     elif platform == "Twitter":
+
         post_id = extract_twitter_id(url)
 
     else:
+
         post_id = None
 
     if not post_id:
@@ -438,6 +548,27 @@ def analyze_post(
         metrics_data = get_tiktok_metrics(
             post_id
         )
+
+    elif platform == "Instagram":
+
+        metrics_data = get_instagram_metrics(url)
+
+        if metrics_data.get("status") != "accessible":
+            return {
+                "status": metrics_data.get(
+                    "status",
+                    "not_accessible"
+                ),
+                "post": {
+                    "url": url,
+                    "platform": "Instagram",
+                    "post_id": post_id
+                },
+                "message": metrics_data.get(
+                    "message",
+                    "Instagram metrics are not available."
+                )
+            }
 
     else:
 

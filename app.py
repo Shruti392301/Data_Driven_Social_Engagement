@@ -171,11 +171,16 @@ if st.session_state.page == "Home":
         ):
             go_to("Forecast")
 
-    with col6:
+
+    st.write("")
+
+    col7, col8 = st.columns(2)
+
+    with col7:
         st.markdown("### 🔗 Post Analyzer")
         st.write(
-            "Analyze an individual social media post and compare its "
-            "performance with SocialPulse historical data."
+            "Analyze an individual social media post using its URL and "
+            "compare its performance with SocialPulse data."
         )
 
         if st.button(
@@ -184,6 +189,7 @@ if st.session_state.page == "Home":
             use_container_width=True
         ):
             go_to("Post Analyzer")
+
 
 
 # ============================================================
@@ -1434,16 +1440,14 @@ elif st.session_state.page == "Forecast":
 
 elif st.session_state.page == "Post Analyzer":
 
-    if st.button("← Back to Home"):
-        go_to("Home")
-
     st.markdown(
         """
         <div style="text-align:center; padding:25px 0 15px 0;">
             <h1>🔗 Social Media Post Analyzer</h1>
             <p>
-                Automatically analyze a social media post using
-                its URL and available platform metrics.
+                Analyze an individual social media post using its URL,
+                calculate engagement and virality metrics, and compare
+                the result with SocialPulse data.
             </p>
         </div>
         """,
@@ -1452,27 +1456,17 @@ elif st.session_state.page == "Post Analyzer":
 
     st.divider()
 
-    # ========================================================
-    # URL INPUT
-    # ========================================================
-
-    st.markdown("## 🔗 Enter Social Media Post")
-
-    st.write(
-        "Paste the URL of a social media post. "
-        "SocialPulse will automatically detect the platform, "
-        "extract the post ID and retrieve the available metrics."
-    )
+    st.markdown("### 🔗 Enter Post URL")
 
     post_url = st.text_input(
-        "Social Media Post URL",
-        placeholder="https://www.youtube.com/watch?v=...",
+        "Paste your social media post link",
+        placeholder="https://www.instagram.com/reel/...",
         key="post_analyzer_url"
     )
 
     st.caption(
-        "Currently configured for automatic metric extraction "
-        "through supported platform APIs."
+        "Supported platforms depend on the backend API configuration. "
+        "Instagram, YouTube and TikTok links can be detected automatically."
     )
 
     st.write("")
@@ -1480,371 +1474,326 @@ elif st.session_state.page == "Post Analyzer":
     analyze_button = st.button(
         "🔍 Analyze Post",
         type="primary",
-        use_container_width=True
+        use_container_width=True,
+        key="analyze_post_button"
     )
-
-    # ========================================================
-    # ANALYSIS
-    # ========================================================
 
     if analyze_button:
 
         if not post_url.strip():
 
             st.warning(
-                "Please paste a social media post URL."
+                "Please enter a social media post URL."
             )
 
         else:
 
             try:
 
-                with st.spinner(
-                    "Extracting post metrics..."
-                ):
+                response = requests.post(
+                    f"{API_URL}/api/analyze-post",
+                    json={
+                        "url": post_url.strip()
+                    },
+                    timeout=30
+                )
 
-                    response = requests.post(
-                        f"{API_URL}/api/analyze-post",
-                        json={
-                            "url": post_url.strip()
-                        },
-                        timeout=30
-                    )
+                try:
+                    result = response.json()
+                except ValueError:
+                    result = {}
 
-                # ------------------------------------------------
+                # --------------------------------------------
                 # API ERROR
-                # ------------------------------------------------
+                # --------------------------------------------
 
                 if response.status_code != 200:
 
-                    try:
-
-                        error_data = response.json()
-
-                        error_message = error_data.get(
-                            "detail",
-                            "Unable to analyze this post."
-                        )
-
-                    except Exception:
-
-                        error_message = (
-                            "Unable to analyze this post."
-                        )
-
-                    st.error(
-                        f"❌ {error_message}"
+                    detail = result.get(
+                        "detail",
+                        "Unable to analyze this post."
                     )
 
-                else:
+                    if isinstance(detail, list):
+                        detail = " ".join(
+                            str(item.get("msg", item))
+                            if isinstance(item, dict)
+                            else str(item)
+                            for item in detail
+                        )
 
-                    result = response.json()
+                    st.error(str(detail))
+
+                # --------------------------------------------
+                # POST NOT ACCESSIBLE
+                # --------------------------------------------
+
+                elif result.get("status") == "not_accessible":
+
+                    post = result.get("post", {})
 
                     st.success(
-                        "✅ Post analyzed successfully."
+                        f"✓ {post.get('platform', 'Social media')} "
+                        "post detected"
                     )
 
-                    # ====================================================
+                    st.info(
+                        result.get(
+                            "message",
+                            "This post is valid, but its engagement "
+                            "metrics are not available through the "
+                            "connected API."
+                        )
+                    )
+
+                    st.markdown("### 📋 Post Information")
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.metric(
+                            "Platform",
+                            post.get("platform", "Unknown")
+                        )
+
+                    with col2:
+                        st.metric(
+                            "Post ID",
+                            post.get("post_id", "Unknown")
+                        )
+
+                    st.markdown("### 🔗 Submitted URL")
+
+                    st.code(
+                        post.get("url", post_url.strip()),
+                        language=None
+                    )
+
+                # --------------------------------------------
+                # SUCCESSFUL ANALYSIS
+                # --------------------------------------------
+
+                elif result.get("status") == "accessible":
+
+                    post = result.get("post", {})
+                    raw = result.get("raw_metrics", {})
+                    metrics = result.get("calculated_metrics", {})
+                    classification = result.get("classification", {})
+                    comparison = result.get("comparison", {})
+
+                    st.success(
+                        f"✓ {post.get('platform', 'Social media')} "
+                        "post analyzed successfully"
+                    )
+
+                    # ----------------------------------------
                     # POST INFORMATION
-                    # ====================================================
+                    # ----------------------------------------
 
-                    st.divider()
-
-                    st.markdown(
-                        "## 📌 Post Information"
-                    )
-
-                    post_info = result["post"]
+                    st.markdown("### 📋 Post Information")
 
                     col1, col2, col3 = st.columns(3)
 
                     with col1:
-
                         st.metric(
                             "Platform",
-                            post_info["platform"]
+                            post.get("platform", "Unknown")
                         )
 
                     with col2:
-
                         st.metric(
                             "Post ID",
-                            post_info["post_id"]
+                            post.get("post_id", "Unknown")
                         )
 
                     with col3:
-
-                        if post_info.get("title"):
-
-                            st.metric(
-                                "Post",
-                                "Detected"
-                            )
-
-                        else:
-
-                            st.metric(
-                                "Post",
-                                "Detected"
-                            )
-
-                    if post_info.get("title"):
-
-                        st.write(
-                            f"**Title:** {post_info['title']}"
+                        st.metric(
+                            "Content Type",
+                            post.get("content_type", "Unknown")
                         )
 
-                    if post_info.get("published_at"):
-
-                        st.write(
-                            f"**Published:** "
-                            f"{post_info['published_at']}"
+                    if post.get("region"):
+                        st.caption(
+                            f"Region: {post.get('region')}"
                         )
 
-                    # ====================================================
-                    # AUTOMATICALLY EXTRACTED METRICS
-                    # ====================================================
+                    # ----------------------------------------
+                    # RAW METRICS
+                    # ----------------------------------------
 
-                    st.divider()
-
-                    st.markdown(
-                        "## 📊 Automatically Extracted Metrics"
-                    )
-
-                    raw = result["raw_metrics"]
+                    st.markdown("### 📊 Post Performance")
 
                     col1, col2, col3, col4 = st.columns(4)
 
                     with col1:
-
                         st.metric(
                             "Views",
-                            f"{raw['views']:,}"
+                            f"{int(raw.get('views', 0)):,}"
                         )
 
                     with col2:
-
                         st.metric(
                             "Likes",
-                            f"{raw['likes']:,}"
+                            f"{int(raw.get('likes', 0)):,}"
                         )
 
                     with col3:
-
                         st.metric(
                             "Shares",
-                            f"{raw['shares']:,}"
+                            f"{int(raw.get('shares', 0)):,}"
                         )
 
                     with col4:
-
                         st.metric(
                             "Comments",
-                            f"{raw['comments']:,}"
+                            f"{int(raw.get('comments', 0)):,}"
                         )
 
-                    st.caption(
-                        "These values were retrieved automatically "
-                        "through the configured platform API."
-                    )
-
-                    # ====================================================
+                    # ----------------------------------------
                     # CALCULATED METRICS
-                    # ====================================================
+                    # ----------------------------------------
 
-                    st.divider()
-
-                    st.markdown(
-                        "## 📈 SocialPulse Metrics"
-                    )
-
-                    metrics = result[
-                        "calculated_metrics"
-                    ]
+                    st.markdown("### 📈 Calculated Metrics")
 
                     col1, col2, col3 = st.columns(3)
 
                     with col1:
-
                         st.metric(
                             "Engagement Rate",
-                            f"{metrics['engagement_rate']:.2f}%"
+                            f"{float(metrics.get('engagement_rate', 0)):.2f}%"
                         )
 
                     with col2:
-
-                        st.metric(
-                            "Virality Score",
-                            f"{metrics['virality_score']:.2f}"
-                        )
-
-                    with col3:
-
-                        st.metric(
-                            "Virality Coefficient",
-                            f"{metrics['viral_coefficient']:.4f}"
-                        )
-
-                    st.write("")
-
-                    col1, col2, col3 = st.columns(3)
-
-                    with col1:
-
-                        st.metric(
-                            "Like Rate",
-                            f"{metrics['like_rate']:.2f}%"
-                        )
-
-                    with col2:
-
                         st.metric(
                             "Share Rate",
-                            f"{metrics['share_rate']:.2f}%"
+                            f"{float(metrics.get('share_rate', 0)):.2f}%"
                         )
 
                     with col3:
-
                         st.metric(
                             "Comment Rate",
-                            f"{metrics['comment_rate']:.2f}%"
+                            f"{float(metrics.get('comment_rate', 0)):.2f}%"
                         )
-
-                    # ====================================================
-                    # CLASSIFICATION
-                    # ====================================================
-
-                    st.divider()
-
-                    st.markdown(
-                        "## 🎯 Post Classification"
-                    )
-
-                    classification = result[
-                        "classification"
-                    ]
 
                     col1, col2 = st.columns(2)
 
                     with col1:
-
-                        engagement_level = (
-                            classification[
-                                "engagement_level"
-                            ]
-                        )
-
                         st.metric(
-                            "Engagement Level",
-                            engagement_level
+                            "Virality Coefficient",
+                            f"{float(metrics.get('viral_coefficient', 0)):.4f}"
                         )
 
                     with col2:
+                        st.metric(
+                            "Virality Score",
+                            f"{float(metrics.get('virality_score', 0)):.2f}"
+                        )
 
-                        if classification[
-                            "engagement_anomaly"
-                        ]:
+                    # ----------------------------------------
+                    # CLASSIFICATION
+                    # ----------------------------------------
 
+                    st.markdown("### 🎯 Post Classification")
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.metric(
+                            "Engagement Level",
+                            classification.get(
+                                "engagement_level",
+                                "Unknown"
+                            )
+                        )
+
+                    with col2:
+                        if classification.get("engagement_anomaly"):
                             st.warning(
                                 "⚠️ Engagement anomaly detected"
                             )
-
                         else:
-
                             st.success(
                                 "✓ No engagement anomaly detected"
                             )
 
-                    # ====================================================
+                    # ----------------------------------------
                     # SOCIALPULSE COMPARISON
-                    # ====================================================
-
-                    st.divider()
+                    # ----------------------------------------
 
                     st.markdown(
-                        "## 📊 Comparison with SocialPulse"
+                        "### 📊 Comparison with SocialPulse Data"
                     )
 
-                    comparison = result[
-                        "comparison"
-                    ]
+                    comparison_posts = comparison.get(
+                        "comparison_posts",
+                        0
+                    )
 
-                    col1, col2 = st.columns(2)
+                    median_engagement = comparison.get(
+                        "median_engagement_rate",
+                        comparison.get("average_engagement", 0)
+                    )
+
+                    median_virality = comparison.get(
+                        "median_virality_score",
+                        comparison.get("average_virality", 0)
+                    )
+
+                    engagement_difference = comparison.get(
+                        "engagement_vs_median_percent",
+                        comparison.get(
+                            "engagement_vs_average_percent"
+                        )
+                    )
+
+                    virality_difference = comparison.get(
+                        "virality_vs_median_percent",
+                        comparison.get(
+                            "virality_vs_average_percent"
+                        )
+                    )
+
+                    col1, col2, col3 = st.columns(3)
 
                     with col1:
-
                         st.metric(
                             "Comparable Posts",
-                            f"{comparison['comparison_posts']:,}"
+                            f"{int(comparison_posts):,}"
                         )
 
                     with col2:
-
                         st.metric(
                             "Median Engagement",
-                            f"{comparison['median_engagement']:.2f}%"
+                            f"{float(median_engagement or 0):.2f}%"
                         )
 
-                    st.write("")
-
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-
+                    with col3:
                         st.metric(
                             "Median Virality",
-                            f"{comparison['median_virality']:.2f}"
+                            f"{float(median_virality or 0):.2f}"
                         )
-
-                    with col2:
-
-                        st.metric(
-                            "Engagement Difference",
-                            f"{comparison['engagement_difference']:+.2f}%"
-                        )
-
-                    st.write("")
 
                     col1, col2 = st.columns(2)
 
                     with col1:
-
-                        if comparison[
-                            "engagement_vs_median_percent"
-                        ] is not None:
-
+                        if engagement_difference is not None:
                             st.metric(
                                 "Engagement vs Median",
-                                f"{comparison['engagement_vs_median_percent']:.1f}%"
+                                f"{float(engagement_difference):+.2f}%"
                             )
 
                     with col2:
-
-                        if comparison[
-                            "virality_vs_median_percent"
-                        ] is not None:
-
+                        if virality_difference is not None:
                             st.metric(
                                 "Virality vs Median",
-                                f"{comparison['virality_vs_median_percent']:.1f}%"
+                                f"{float(virality_difference):+.2f}%"
                             )
 
-                    st.write("")
-
-                    st.metric(
-                        "Virality Difference",
-                        f"{comparison['virality_difference']:+.2f}"
-                    )
-
-                    # ====================================================
+                    # ----------------------------------------
                     # ENGAGEMENT BREAKDOWN
-                    # ====================================================
+                    # ----------------------------------------
 
-                    st.divider()
-
-                    st.markdown(
-                        "## 📊 Engagement Breakdown"
-                    )
+                    st.markdown("### 📊 Engagement Breakdown")
 
                     chart_df = pd.DataFrame({
                         "Metric": [
@@ -1853,9 +1802,9 @@ elif st.session_state.page == "Post Analyzer":
                             "Comments"
                         ],
                         "Count": [
-                            raw["likes"],
-                            raw["shares"],
-                            raw["comments"]
+                            raw.get("likes", 0),
+                            raw.get("shares", 0),
+                            raw.get("comments", 0)
                         ]
                     })
 
@@ -1877,78 +1826,9 @@ elif st.session_state.page == "Post Analyzer":
                         use_container_width=True
                     )
 
-                    # ====================================================
-                    # PERFORMANCE SUMMARY
-                    # ====================================================
-
-                    st.divider()
-
-                    st.markdown(
-                        "## 📝 Performance Summary"
-                    )
-
-                    engagement_difference = (
-                        comparison[
-                            "engagement_difference"
-                        ]
-                    )
-
-                    virality_difference = (
-                        comparison[
-                            "virality_difference"
-                        ]
-                    )
-
-                    if engagement_difference > 0:
-
-                        engagement_message = (
-                            "The post has a higher engagement rate "
-                            "than the SocialPulse median."
-                        )
-
-                    elif engagement_difference < 0:
-
-                        engagement_message = (
-                            "The post has a lower engagement rate "
-                            "than the SocialPulse median."
-                        )
-
-                    else:
-
-                        engagement_message = (
-                            "The post's engagement rate is equal "
-                            "to the SocialPulse median."
-                        )
-
-                    if virality_difference > 0:
-
-                        virality_message = (
-                            "Its virality score is higher than "
-                            "the SocialPulse median."
-                        )
-
-                    elif virality_difference < 0:
-
-                        virality_message = (
-                            "Its virality score is lower than "
-                            "the SocialPulse median."
-                        )
-
-                    else:
-
-                        virality_message = (
-                            "Its virality score is equal to "
-                            "the SocialPulse median."
-                        )
-
-                    st.info(
-                        f"**Engagement:** {engagement_message}\n\n"
-                        f"**Virality:** {virality_message}"
-                    )
-
-                    # ====================================================
-                    # FORMULAS
-                    # ====================================================
+                    # ----------------------------------------
+                    # CALCULATION FORMULAS
+                    # ----------------------------------------
 
                     with st.expander(
                         "🧮 View Calculation Formulas"
@@ -1960,10 +1840,6 @@ elif st.session_state.page == "Post Analyzer":
 
                             `(Likes + Shares + Comments) / Views × 100`
 
-                            **Like Rate**
-
-                            `Likes / Views × 100`
-
                             **Share Rate**
 
                             `Shares / Views × 100`
@@ -1972,9 +1848,13 @@ elif st.session_state.page == "Post Analyzer":
 
                             `Comments / Views × 100`
 
+                            **Like Rate**
+
+                            `Likes / Views × 100`
+
                             **Virality Coefficient**
 
-                            `0.60 × (Shares / Views) + 0.20 × (Comments / Views) + 0.20 × (Likes / Views)`
+                            `0.60 × Share Rate + 0.20 × Comment Rate + 0.20 × Like Rate`
 
                             **Virality Score**
 
@@ -1982,25 +1862,45 @@ elif st.session_state.page == "Post Analyzer":
                             """
                         )
 
+                # --------------------------------------------
+                # OTHER RESPONSE
+                # --------------------------------------------
+
+                else:
+
+                    st.warning(
+                        result.get(
+                            "message",
+                            "The post could not be analyzed."
+                        )
+                    )
+
             except requests.exceptions.Timeout:
 
                 st.error(
-                    "❌ The request timed out. "
-                    "Please try again."
+                    "The analysis request timed out. Please try again."
                 )
 
             except requests.exceptions.ConnectionError:
 
                 st.error(
-                    "❌ Could not connect to the SocialPulse backend."
+                    "Could not connect to the SocialPulse backend. "
+                    "Make sure FastAPI is running."
+                )
+
+            except requests.exceptions.RequestException as e:
+
+                st.error(
+                    f"Unable to connect to the backend: {e}"
                 )
 
             except Exception as e:
 
                 st.error(
-                    f"❌ Unable to analyze the post: {e}"
+                    f"Unable to analyze the post: {e}"
                 )
-# ============================================================
+
+
 # FOOTER
 # ============================================================
 
