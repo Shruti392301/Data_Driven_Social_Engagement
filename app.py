@@ -156,6 +156,7 @@ if st.session_state.page == "Home":
 
     st.write("")
 
+
     col5, col6 = st.columns(2)
 
     with col5:
@@ -171,12 +172,7 @@ if st.session_state.page == "Home":
         ):
             go_to("Forecast")
 
-
-    st.write("")
-
-    col7, col8 = st.columns(2)
-
-    with col7:
+    with col6:
         st.markdown("### 🔗 Post Analyzer")
         st.write(
             "Analyze an individual social media post using its URL and "
@@ -189,6 +185,8 @@ if st.session_state.page == "Home":
             use_container_width=True
         ):
             go_to("Post Analyzer")
+
+
 
 
 
@@ -1574,6 +1572,15 @@ elif st.session_state.page == "Post Analyzer":
                 # --------------------------------------------
 
                 elif result.get("status") == "accessible":
+                    post_data = result.get("post", {})
+                    post_title = post_data.get("title")
+                    platform = post_data.get("platform", "").upper()
+
+                    if post_title:
+                        st.markdown(f"### {post_title}")
+
+                    if platform:
+                        st.caption(f"Platform: {platform}")
 
                     post = result.get("post", {})
                     raw = result.get("raw_metrics", {})

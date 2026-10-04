@@ -710,6 +710,8 @@ def analyze_post(
 
     return {
 
+        "status": "accessible",
+
         "post": {
             "url": url,
             "platform": platform,
@@ -718,16 +720,16 @@ def analyze_post(
             "published_at": metrics_data.get(
                 "published_at"
             )
-        },
+        }, 
 
-        "raw_metrics": {
-            "views": views,
-            "likes": likes,
-            "shares": shares,
-            "comments": comments
-        },
+    "raw_metrics": {
+        "views": views,
+        "likes": likes,
+        "shares": shares,
+        "comments": comments
+    },
 
-        "calculated_metrics": metrics,
+    "calculated_metrics": metrics,
 
         "classification": {
             "engagement_level":
