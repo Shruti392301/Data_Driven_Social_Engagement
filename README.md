@@ -1,316 +1,214 @@
-# 📊 SocialPulse
-
-### A Data-Driven Social Media Engagement Intelligence System
-
-**SocialPulse** is a data-driven social media analytics platform that analyzes content performance, engagement, virality, audience sentiment, trends, and future virality patterns.
-
-The system combines **historical social media datasets, machine learning, NLP, statistical analysis, forecasting, and real-time social media post analysis** to provide actionable insights through an interactive dashboard.
-
-## 🎯 Objectives
-
-* Analyze social media content performance
-* Calculate engagement and virality metrics
-* Compare platforms, content types, hashtags, and regions
-* Analyze audience sentiment from comments
-* Apply machine learning and statistical techniques
-* Recommend high-performing content combinations
-* Forecast future virality trends
-* Analyze individual social media posts using their URLs
-* Provide an interactive web-based analytics dashboard
-
-## 📊 Datasets
-
-### Viral Social Media Trends
-
-Approximately **5,000 social media posts** containing:
-
-* Platform
-* Content Type
-* Hashtag
-* Region
-* Views
-* Likes
-* Shares
-* Comments
-* Engagement Level
-* Post Date
-
-### Social Media Comments
-
-A sentiment dataset containing approximately **36,793 cleaned comments** categorized as:
-
-* `1` → Positive
-* `0` → Neutral
-* `-1` → Negative
-
-## 🔍 Core Modules
-
-### 1. Data Cleaning & Preprocessing
-
-* Missing value handling
-* Duplicate removal
-* Date conversion
-* Data validation
-* Anomaly detection
-* Feature engineering
-
-### 2. Engagement & Virality Analysis
-
-**Engagement Rate:**
-
-```text
-(Likes + Shares + Comments) / Views × 100
-```
-
-**Virality Score:**
-
-```text
-0.60 × Shares/Views
-+ 0.20 × Comments/Views
-+ 0.20 × Likes/Views
-```
-
-### 3. Performance Analysis
-
-Analyzes performance across:
-
-* Platforms
-* Content Types
-* Hashtags
-* Regions
-* Monthly trends
-
-### 4. Audience Sentiment Analysis
-
-Uses NLP techniques including:
-
-* NLTK
-* TextBlob
-* Text preprocessing
-* Stopword removal
-* Lemmatization
-
-### 5. Machine Learning
-
-Machine learning models are used for engagement and virality-related analysis.
-
-Models include:
-
-* Logistic Regression
-* Random Forest
-
-Evaluation metrics include:
-
-* Accuracy
-* Precision
-* Recall
-* F1 Score
-* Confusion Matrix
-
-### 6. Statistical Analysis
-
-Statistical techniques include:
-
-* T-Test
-* ANOVA
-* Correlation Analysis
-
-### 7. Recommendation System
-
-Identifies potentially high-performing content combinations using historical patterns involving:
-
-* Platform
-* Hashtag
-* Content Type
-* Engagement
-* Shares
-* Virality
-
-### 8. Trend Forecasting
-
-Uses **Holt Exponential Smoothing** to forecast future monthly virality trends based on historical data.
-
-### 9. Real-Time Post Analyzer
-
-SocialPulse can analyze individual social media posts through their URLs.
-
-The Post Analyzer:
-
-* Detects the social media platform
-* Retrieves available post information
-* Fetches current engagement metrics
-* Calculates engagement and virality metrics
-* Classifies post performance
-* Compares the post with historical SocialPulse data
-
-Currently supports real-time analysis for supported **YouTube and Instagram** posts.
-
-## 🖥️ Dashboard
-
-The Streamlit dashboard provides:
-
-* 📊 Overview analytics
-* 📈 Platform performance
-* 🔥 Virality Explorer
-* 👥 Audience sentiment insights
-* 💡 Content recommendations
-* 📅 Trend forecasting
-* 🔗 Real-time Post Analyzer
-* KPI cards
-* Interactive charts
-* Platform and content comparisons
-
-## 🛠️ Tech Stack
-
-### Programming
-
-* Python 3.12
-
-### Data & Machine Learning
-
-* Pandas
-* NumPy
-* Scikit-learn
-* SciPy
-* Statsmodels
-
-### NLP
-
-* NLTK
-* TextBlob
-* spaCy
-
-### Visualization
-
-* Plotly
-* Matplotlib
-
-### Web Application
-
-* Streamlit
-* FastAPI
-* Uvicorn
-
-### APIs & Data Extraction
-
-* YouTube Data API
-* Instagram API
-* Requests
-* BeautifulSoup
-
-### Development Tools
-
-* VS Code
-* Jupyter Notebook
-* Git
-* GitHub
-
-## 📁 Project Structure
+# Social Sense — Data-Driven Social Media Engagement Intelligence System
+
+Social Sense is a Streamlit-based dashboard for exploring social media engagement, post performance, virality metrics, audience insights, and historical content recommendations. It connects to an existing FastAPI backend to retrieve and analyze available data.
+
+## Features
+
+### 1. Home
+- Social Sense branding and dashboard introduction.
+- Performance overview using data returned by the backend.
+- **Analyze a Post** button that navigates to the Social Media Post Analyzer.
+- Quick overview of the available analytics pages.
+
+### 2. Social Media Post Analyzer
+- Enter a supported social media post URL.
+- Submit the URL to the existing analysis API.
+- View available post information, including platform, title, and engagement metrics.
+- Display views, likes, comments, shares, engagement rate, and virality information when returned by the API.
+- Handle invalid input and API errors.
+- Inspect the complete API response for additional details.
+
+### 3. Virality Calculator
+- Calculate basic engagement totals from views, likes, comments, and shares.
+- Display engagement per view when views are greater than zero.
+- Explore historical top-performing posts returned by the backend.
+- Search posts by hashtag or post ID.
+- Filter by platform and content type when those fields are available.
+- Sort and visualize posts using available virality or engagement metrics.
+
+**Note:** The basic arithmetic displayed by the calculator is not a replacement for the project's backend virality-scoring algorithm.
+
+### 4. Audience Insights
+- Explore audience sentiment and engagement insights using available backend data.
+- Display data returned by the configured API.
+- Show appropriate messages when records or required fields are unavailable.
+
+### 5. Content Recommendations
+- Explore historical content patterns and recommendations.
+- Review available virality and engagement metrics.
+- Search, sort, and paginate recommendation records when supported by the returned data.
+- Use historical performance to inform content strategy.
+
+Recommendations describe observed patterns and do not guarantee future performance.
+
+## Technology Stack
+
+- **Python** — application logic
+- **Streamlit** — interactive dashboard and navigation
+- **Pandas** — data processing and tabular views
+- **Plotly** — interactive charts
+- **Requests** — communication with the backend API
+- **FastAPI** — backend services and analytics endpoints
+
+## Project Structure
 
 ```text
 Data_Driven_Social_Engagement/
-│
 ├── app.py
-├── backend/
-│   ├── main.py
-│   └── api/
-│
-├── data/
-│   ├── raw/
-│   └── processed/
-│
-├── notebooks/
-├── outputs/
-│   ├── dashboard/
-│   ├── forecasting/
-│   ├── ml/
-│   ├── recommendations/
-│   ├── sentiment/
-│   └── statistics/
-│
-├── docs/
 ├── requirements.txt
-└── README.md
+├── social_sense_icon.jpg
+├── README.md
+└── .venv/                 # Local virtual environment, not committed
 ```
 
-## ▶️ Run Locally
+Other backend files and datasets may exist in the full project repository.
+
+## Prerequisites
+
+- Python 3.10 or a compatible version supported by your dependencies
+- Git
+- A running FastAPI backend
+- The backend's required datasets and configuration
+
+## Installation
 
 ### 1. Clone the repository
 
 ```bash
 git clone https://github.com/Shruti392301/Data_Driven_Social_Engagement.git
-
 cd Data_Driven_Social_Engagement
 ```
 
-### 2. Create a virtual environment
+### 2. Create and activate a virtual environment
 
-```bash
+**Windows PowerShell:**
+
+```powershell
 python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-### 3. Activate the environment
+If the virtual environment already exists, activate it instead of creating it again.
 
-Windows:
-
-```bash
-.venv\Scripts\activate
-```
-
-### 4. Install dependencies
+### 3. Install dependencies
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-### 5. Start the FastAPI backend
+If the requirements file is incomplete, the dashboard directly imports Streamlit, Requests, Pandas, and Plotly. Install any missing packages before running the app.
 
-```bash
-python -m uvicorn backend.main:app --reload
+## Configuration
+
+The dashboard uses the `SOCIALPULSE_API_URL` environment variable to locate the FastAPI backend.
+
+By default, the API URL is:
+
+```text
+http://localhost:8000
 ```
 
-### 6. Start the Streamlit dashboard
+To configure a different backend URL in Windows PowerShell:
 
-Open another terminal and run:
+```powershell
+$env:SOCIALPULSE_API_URL = "http://localhost:8000"
+```
+
+Replace the URL with the actual address of your running backend when necessary.
+
+The backend must expose the endpoints expected by the dashboard. Available features depend on the backend implementation and the data it returns.
+
+## Running the Application
+
+### 1. Start the FastAPI backend
+
+From the backend directory, use the startup command specified by your project's FastAPI setup. For example, if the backend entry point is `main.py` and it exposes `app`:
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+Adjust the module and application names to match your backend files.
+
+### 2. Start the Streamlit dashboard
+
+Open another terminal in the project directory, activate the virtual environment, and run:
 
 ```bash
 streamlit run app.py
 ```
 
-The dashboard will then be available locally through the Streamlit URL.
+Streamlit will display a local URL, typically:
 
-## 🌐 Deployment
+```text
+http://localhost:8501
+```
 
-SocialPulse is deployed using:
+Open that URL in your browser.
 
-* **Streamlit** — Frontend Dashboard
-* **Render** — FastAPI Backend
+## API Integration
 
-The deployed architecture separates the interactive dashboard from the API backend, allowing the Post Analyzer to retrieve real-time social media data while the other modules use historical datasets and trained models.
+The dashboard communicates with the configured FastAPI service.
 
-## ⚠️ Limitations
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/summary` | Retrieve the Home page performance summary |
+| `POST /api/analyze-post` | Analyze a submitted social media post URL |
+| `GET /api/top-posts` | Retrieve records for the Top Viral Posts section |
 
-* Historical analytics depend on the available datasets.
-* Social media API access depends on platform availability and API permissions.
-* Some social media posts may not be publicly accessible through APIs.
-* Virality Score is a project-defined metric.
-* Forecast accuracy depends on historical patterns.
-* Real-time metrics may change after analysis because social media engagement is dynamic.
+Additional API endpoints are used by the Audience Insights and Content Recommendations pages. Their exact paths and response schemas depend on the backend implementation.
 
-## 🚀 Future Scope
+The dashboard expects JSON responses and reports API connection errors, HTTP errors, and unavailable records where handled by the interface.
 
-* Transformer-based sentiment analysis
-* Advanced deep learning models for virality prediction
-* Personalized recommendation models
-* Database integration for scalable storage
-* Real-time monitoring of multiple posts
-* Advanced time-series forecasting
-* Additional social media platform integrations
-* Automated content strategy generation
+## Error Handling and Data Integrity
 
-## 👩‍💻 Author
+- API requests use timeouts.
+- HTTP and connection errors are handled in the interface.
+- Nested API responses are inspected without assuming every field is a scalar.
+- Missing data is not intentionally replaced with fabricated post records.
+- Charts and tables depend on the fields returned by the backend.
+- Backend calculations remain the source of truth for backend-generated analytics.
 
-**Shruti Gaikwad**
+## Git Workflow
 
-B.Tech – Artificial Intelligence and Data Science
-PVG's College of Engineering and Technology
+To save and publish local changes:
+
+```bash
+git status
+git add README.md
+git commit -m "Update project README"
+git push origin main
+```
+
+To include other intended changes, stage those files separately or use `git add .` after reviewing `git status`.
+
+## Troubleshooting
+
+**The dashboard cannot connect to the API**
+- Confirm that the FastAPI backend is running.
+- Verify `SOCIALPULSE_API_URL`.
+- Check that the expected endpoint exists and returns JSON.
+
+**A chart or table has no records**
+- Confirm that the backend returns records in a supported response format.
+- Check that the required columns exist in the response.
+- Verify that the backend datasets are available.
+
+**A package is missing**
+- Activate the virtual environment.
+- Run `python -m pip install -r requirements.txt`.
+
+**The Home page navigation does not switch pages**
+- Confirm that the button updates `st.session_state.socialpulse_page`.
+- Ensure the destination matches the page name used by the sidebar navigation.
+
+## Future Improvements
+
+- Add automated tests for navigation and API response handling.
+- Improve API health and connection-status reporting.
+- Add additional filters and export options where supported by the data.
+- Expand analytics while preserving the existing backend logic.
+
+## License
+
+Add the license applicable to this project before distributing or reusing it publicly.
