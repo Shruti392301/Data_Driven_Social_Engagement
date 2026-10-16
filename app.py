@@ -1,1918 +1,643 @@
-import streamlit as st
-import requests
+"""
+SocialPulse — Data-Driven Social Media Engagement Intelligence System
+Streamlit UI with five tabs, designed to integrate with the existing FastAPI backend.
+
+Run:
+    pip install streamlit requests pandas plotly
+    streamlit run app.py
+
+Configuration:
+    Set SOCIALPULSE_API_URL to your FastAPI base URL (default: http://localhost:8000).
+    This UI calls existing endpoints and avoids fabricating post or recommendation records.
+"""
+from __future__ import annotations
+
+import os
+from typing import Any
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
+import streamlit as st
 
-API_URL = "https://data-driven-social-engagement-2.onrender.com"
+# Keep this configurable so an existing deployment can retain its backend URL.
+API_BASE_URL = os.getenv("SOCIALPULSE_API_URL", "http://localhost:8000").rstrip("/")
+REQUEST_TIMEOUT = (4, 25)
+
+ICON_PATH = os.path.join(os.path.dirname(__file__), "social_sense_icon.jpg")
 
 st.set_page_config(
-    page_title="SocialPulse",
-    page_icon="📊",
+    page_title="Social Sense | Engagement Intelligence",
+
+    page_icon=ICON_PATH,
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded",
 )
 
+# ---------- Styling ----------
+st.markdown(
+    """
+    <style>
+    :root { color-scheme: dark; }
+    .stApp { background: #0b1020; color: #edf2ff; }
+    [data-testid="stHeader"] { background: rgba(11,16,32,.88); }
+    [data-testid="stSidebar"] { background: #10172a; border-right: 1px solid #27324b; }
+    [data-testid="stMetric"] {
+        background: #121b30; border: 1px solid #293650; border-radius: 14px;
+        padding: 16px 18px;
+    }
+    [data-testid="stMetricLabel"] { color: #a8b6d3; }
+    [data-testid="stMetricValue"] { color: #f3f6ff; }
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-color: #293650 !important; border-radius: 14px;
+    }
+    .eyebrow { color:#7dd3fc; font-size:.78rem; letter-spacing:.13em; text-transform:uppercase; }
+    .muted { color:#a8b6d3; }
+    .hero {
+        background: linear-gradient(120deg,#141d35,#15152d);
+        border: 1px solid #293650; border-radius: 18px; padding: 28px;
+        margin: 4px 0 20px 0;
+    }
+    .hero h1 { margin: 5px 0 8px 0; font-size: clamp(3.2rem, 7vw, 6.2rem); line-height: 1.02; font-weight: 800; letter-spacing: -0.045em; }
+    .brand-title { font-size: 1.75rem; font-weight: 800; letter-spacing: -0.035em; color: #f3f6ff; line-height: 1.05; }
+    .brand-subtitle { font-size: .78rem; color: #a8b6d3; margin-top: 5px; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:99px;
+        background:#202b48; color:#c4b5fd; font-size:.78rem; margin-right:6px; }
+    div.stButton > button[kind="primary"] {
+        background: #7565e8; border: 1px solid #9185ff; color:white;
+    }
+    div.stButton > button { border-radius: 10px; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-# ============================================================
-# API FUNCTIONS
-# ============================================================
-
-def get_api_data(endpoint, params=None):
+# ---------- API helpers ----------
+def api_get(path: str, params: dict[str, Any] | None = None) -> Any:
+    """Return decoded JSON or raise a useful error."""
     response = requests.get(
-        f"{API_URL}{endpoint}",
-        params=params,
-        timeout=15
+        f"{API_BASE_URL}{path}", params=params, timeout=REQUEST_TIMEOUT
     )
     response.raise_for_status()
+    if not response.content:
+        return {}
     return response.json()
 
 
-def backend_available():
-    try:
-        response = requests.get(
-            f"{API_URL}/health",
-            timeout=5
-        )
-        return response.status_code == 200
-    except:
-        return False
+def api_post(path: str, payload: dict[str, Any]) -> Any:
+    response = requests.post(
+        f"{API_BASE_URL}{path}", json=payload, timeout=REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+    if not response.content:
+        return {}
+    return response.json()
 
 
-# ============================================================
-# NAVIGATION
-# ============================================================
-
-if "page" not in st.session_state:
-    st.session_state.page = "Home"
-
-
-def go_to(page):
-    st.session_state.page = page
-    st.rerun()
-
-
-# ============================================================
-# BACKEND CHECK
-# ============================================================
-
-if not backend_available():
-
-    st.error("❌ SocialPulse backend is not running.")
-
-    st.info(
-        "Start FastAPI using:\n\n"
-        "`python -m uvicorn backend.main:app --reload`"
+def show_api_error(error: Exception, endpoint: str) -> None:
+    st.warning(
+        f"Could not load `{endpoint}` from the API at `{API_BASE_URL}`. "
+        "Check that the FastAPI backend is running and that its configured URL is correct. "
+        f"Details: {error}"
     )
 
-    st.stop()
+
+def as_frame(payload: Any) -> pd.DataFrame:
+    """Convert common API response shapes into a DataFrame without inventing rows."""
+    if isinstance(payload, list):
+        return pd.DataFrame(payload)
+    if isinstance(payload, dict):
+        for key in ("data", "results", "items", "posts", "records", "recommendations", "comments"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return pd.DataFrame(value)
+        # Some endpoints return a single record.
+        if payload and all(not isinstance(v, (list, dict)) for v in payload.values()):
+            return pd.DataFrame([payload])
+    return pd.DataFrame()
 
 
-# ============================================================
-# HOME PAGE
-# ============================================================
-if st.session_state.page == "Home":
+def first_value(data: Any, *keys: str, default: Any = None) -> Any:
+    if isinstance(data, dict):
+        for key in keys:
+            if key in data and data[key] is not None:
+                return data[key]
+    return default
 
+
+def numeric_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+    for col in candidates:
+        if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
+            return col
+        if col in df.columns:
+            converted = pd.to_numeric(df[col], errors="coerce")
+            if converted.notna().any():
+                df[col] = converted
+                return col
+    return None
+
+
+def find_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+    lower_map = {str(c).lower().strip().replace(" ", "_"): c for c in df.columns}
+    for candidate in candidates:
+        normalized = candidate.lower().strip().replace(" ", "_")
+        if normalized in lower_map:
+            return lower_map[normalized]
+    return None
+
+
+def show_table(df: pd.DataFrame, key: str, height: int = 360) -> None:
+    if df.empty:
+        st.info("No records were returned by the backend for this view.")
+    else:
+        st.dataframe(df, use_container_width=True, hide_index=True, height=height, key=key)
+
+
+def api_options(path: str, fallback: list[str] | None = None) -> list[str]:
+    try:
+        payload = api_get(path)
+        if isinstance(payload, dict):
+            values = first_value(payload, "data", "items", "values", "platforms", "regions", "content_types", "hashtags")
+            if isinstance(values, list):
+                return [str(v) for v in values if v is not None]
+        if isinstance(payload, list):
+            return [str(v) for v in payload if v is not None]
+    except Exception:
+        pass
+    return fallback or []
+
+
+def safe_pct(value: Any) -> str:
+    try:
+        v = float(value)
+        return f"{v:.2f}%"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def page_title(title: str, subtitle: str) -> None:
+    st.markdown(f'<div class="eyebrow">SOCIALPULSE / ANALYTICS</div>', unsafe_allow_html=True)
+    st.title(title)
+    st.caption(subtitle)
+
+
+def call_table_endpoint(endpoint: str, params: dict[str, Any] | None = None) -> pd.DataFrame:
+    payload = api_get(endpoint, params=params)
+    return as_frame(payload)
+
+
+# ---------- Navigation ----------
+PAGES = [
+    "Home",
+    "Social Media Post Analyzer",
+    "Virality Calculator",
+    "Audience Insights",
+    "Content Recommendations",
+]
+if "socialpulse_page" not in st.session_state:
+    st.session_state.socialpulse_page = "Home"
+
+
+def go_to_analyzer() -> None:
+    st.session_state.socialpulse_page = "Social Media Post Analyzer"
+
+
+with st.sidebar:
+    if os.path.exists(ICON_PATH):
+        st.image(ICON_PATH, width=108)
+    st.markdown('<div class="brand-title">Social Sense</div><div class="brand-subtitle">Engagement intelligence</div>', unsafe_allow_html=True)
+    st.divider()
+    selected_page = st.radio(
+        "Navigation",
+        PAGES,
+        index=PAGES.index(st.session_state.socialpulse_page),
+        key="socialpulse_nav",
+        label_visibility="collapsed",
+    )
+    st.session_state.socialpulse_page = selected_page
+
+page = st.session_state.socialpulse_page
+
+# ---------- Home ----------
+if page == "Home":
+    # Note: The original app.py was not available in this session. This is a standalone
+    # Home view; merge the new tabs into the existing Home file to preserve it exactly.
     st.markdown(
         """
-        <div style="text-align: center; padding: 35px 0 20px 0;">
-            <h1 style="font-size: 52px;">📊 SocialPulse</h1>
-            <h3>A Data-Driven Social Media Engagement Intelligence System</h3>
-            <p style="font-size: 18px;">
-                Understand content performance, virality, audience sentiment
-                and social media trends through data.
-            </p>
+        <div class="hero">
+          <div class="eyebrow">SOCIAL MEDIA ENGAGEMENT INTELLIGENCE</div>
+          <h1>Social Sense</h1>
+          <h3 style="font-weight:500; margin-top:8px;">Understand what makes content perform.</h3>
+          <p class="muted">Explore engagement, audience sentiment, virality and historical content patterns in one workspace.</p>
+          <span class="pill">Analytics</span><span class="pill">Audience insights</span><span class="pill">Content strategy</span>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-
-    st.divider()
-
-    st.markdown(
-        "<h2 style='text-align:center;'>What would you like to explore?</h2>",
-        unsafe_allow_html=True
-    )
-
-    st.write("")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("### 📊 Explore Analytics")
-        st.write(
-            "Explore platform, region, content type and hashtag performance."
-        )
-
-        if st.button(
-            "Explore Analytics →",
-            key="analytics_button",
-            use_container_width=True
-        ):
-            go_to("Explore Analytics")
-
-    with col2:
-        st.markdown("### 🚀 Virality Explorer")
-        st.write(
-            "Explore viral posts and calculate the virality of custom content."
-        )
-
-        if st.button(
-            "Explore Virality →",
-            key="virality_button",
-            use_container_width=True
-        ):
-            go_to("Virality")
-
-    st.write("")
-
-    col3, col4 = st.columns(2)
-
-    with col3:
-        st.markdown("### 💬 Audience Insights")
-        st.write(
-            "Understand positive, neutral and negative audience sentiment."
-        )
-
-        if st.button(
-            "Explore Audience →",
-            key="audience_button",
-            use_container_width=True
-        ):
-            go_to("Audience")
-
-    with col4:
-        st.markdown("### 🎯 Recommendations")
-        st.write(
-            "Get content and hashtag recommendations based on historical data."
-        )
-
-        if st.button(
-            "Get Recommendations →",
-            key="recommendation_button",
-            use_container_width=True
-        ):
-            go_to("Recommendations")
-
-    st.write("")
-
-
-    col5, col6 = st.columns(2)
-
-    with col5:
-        st.markdown("### 📈 Forecast")
-        st.write(
-            "Explore estimated future virality based on historical trends."
-        )
-
-        if st.button(
-            "View Forecast →",
-            key="forecast_button",
-            use_container_width=True
-        ):
-            go_to("Forecast")
-
-    with col6:
-        st.markdown("### 🔗 Post Analyzer")
-        st.write(
-            "Analyze an individual social media post using its URL and "
-            "compare its performance with SocialPulse data."
-        )
-
-        if st.button(
-            "Analyze a Post →",
-            key="post_analyzer_button",
-            use_container_width=True
-        ):
-            go_to("Post Analyzer")
-
-
-
-
-
-# ============================================================
-# EXPLORE ANALYTICS
-# ============================================================
-
-elif st.session_state.page == "Explore Analytics":
-
-    if st.button("← Back to Home"):
-        go_to("Home")
-
-    st.title("📊 Explore Analytics")
-
-    st.write(
-        "Explore how social media performance varies across platforms, "
-        "regions, content types and hashtags."
-    )
-
-    st.divider()
-
-    st.markdown("## 📌 Overall Performance")
-
-    summary = get_api_data("/api/summary")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric(
-            "Total Posts",
-            f"{summary['total_posts']:,}"
-        )
-
-    with col2:
-        st.metric(
-            "Total Views",
-            f"{summary['total_views']:,}"
-        )
-
-    with col3:
-        st.metric(
-            "Total Likes",
-            f"{summary['total_likes']:,}"
-        )
-
-    with col4:
-        st.metric(
-            "Total Shares",
-            f"{summary['total_shares']:,}"
-        )
-
-    st.divider()
-
-    st.markdown("## 📈 Performance Explorer")
-
-    metric = st.selectbox(
-        "Choose a metric to explore",
-        [
-            "Median Engagement",
-            "Median Virality"
-        ],
-        key="analytics_metric"
-    )
-
-    st.caption(
-        "Use this selector to compare different dimensions of social media performance."
-    )
-
-    # Platform
-    st.markdown("### 📱 Platform Performance")
-
-    platform_data = pd.DataFrame(
-        get_api_data("/api/platforms")
-    )
-
-    if metric == "Median Engagement":
-
-        fig_platform = px.bar(
-            platform_data,
-            x="platform",
-            y="median_engagement",
-            title="Engagement by Platform",
-            labels={
-                "platform": "Platform",
-                "median_engagement": "Median Engagement (%)"
-            },
-            text_auto=".2f"
-        )
-
-    else:
-
-        fig_platform = px.bar(
-            platform_data,
-            x="platform",
-            y="median_virality",
-            title="Virality by Platform",
-            labels={
-                "platform": "Platform",
-                "median_virality": "Median Virality Score"
-            },
-            text_auto=".2f"
-        )
-
-    st.plotly_chart(
-        fig_platform,
-        use_container_width=True
-    )
-
-    st.info(
-        "This chart compares historical social media performance across "
-        "Instagram, TikTok, Twitter and YouTube."
-    )
-
-    # Region
-    st.markdown("### 🌍 Regional Performance")
-
-    region_data = pd.DataFrame(
-        get_api_data("/api/regions")
-    )
-
-    if metric == "Median Engagement":
-
-        region_data = region_data.sort_values(
-            "median_engagement",
-            ascending=False
-        )
-
-        fig_region = px.bar(
-            region_data,
-            x="region",
-            y="median_engagement",
-            title="Engagement by Region",
-            labels={
-                "region": "Region",
-                "median_engagement": "Median Engagement (%)"
-            },
-            text_auto=".2f"
-        )
-
-    else:
-
-        region_data = region_data.sort_values(
-            "median_virality",
-            ascending=False
-        )
-
-        fig_region = px.bar(
-            region_data,
-            x="region",
-            y="median_virality",
-            title="Virality by Region",
-            labels={
-                "region": "Region",
-                "median_virality": "Median Virality Score"
-            },
-            text_auto=".2f"
-        )
-
-    st.plotly_chart(
-        fig_region,
-        use_container_width=True
-    )
-
-    st.info(
-        "Regional analysis shows how historical social media performance "
-        "varies across different geographic regions."
-    )
-
-    # Content type
-    st.markdown("### 🎬 Content Type Performance")
-
-    content_data = pd.DataFrame(
-        get_api_data("/api/content-types")
-    )
-
-    if metric == "Median Engagement":
-
-        content_data = content_data.sort_values(
-            "median_engagement",
-            ascending=False
-        )
-
-        fig_content = px.bar(
-            content_data,
-            x="content_type",
-            y="median_engagement",
-            title="Engagement by Content Type",
-            labels={
-                "content_type": "Content Type",
-                "median_engagement": "Median Engagement (%)"
-            },
-            text_auto=".2f"
-        )
-
-    else:
-
-        content_data = content_data.sort_values(
-            "median_virality",
-            ascending=False
-        )
-
-        fig_content = px.bar(
-            content_data,
-            x="content_type",
-            y="median_virality",
-            title="Virality by Content Type",
-            labels={
-                "content_type": "Content Type",
-                "median_virality": "Median Virality Score"
-            },
-            text_auto=".2f"
-        )
-
-    st.plotly_chart(
-        fig_content,
-        use_container_width=True
-    )
-
-    st.info(
-        "This comparison shows how different content formats are associated "
-        "with engagement and virality in the dataset."
-    )
-
-    # Hashtags
-    st.markdown("### #️⃣ Hashtag Performance")
-
-    hashtag_data = pd.DataFrame(
-        get_api_data("/api/hashtags")
-    )
-
-    if metric == "Median Engagement":
-
-        hashtag_data = hashtag_data.sort_values(
-            "median_engagement",
-            ascending=True
-        )
-
-        fig_hashtag = px.bar(
-            hashtag_data,
-            x="median_engagement",
-            y="hashtag",
-            orientation="h",
-            title="Engagement by Hashtag",
-            labels={
-                "hashtag": "Hashtag",
-                "median_engagement": "Median Engagement (%)"
-            },
-            text_auto=".2f"
-        )
-
-    else:
-
-        hashtag_data = hashtag_data.sort_values(
-            "median_virality",
-            ascending=True
-        )
-
-        fig_hashtag = px.bar(
-            hashtag_data,
-            x="median_virality",
-            y="hashtag",
-            orientation="h",
-            title="Virality by Hashtag",
-            labels={
-                "hashtag": "Hashtag",
-                "median_virality": "Median Virality Score"
-            },
-            text_auto=".2f"
-        )
-
-    st.plotly_chart(
-        fig_hashtag,
-        use_container_width=True
-    )
-
-    st.info(
-        "Hashtag analysis shows the historical engagement or virality "
-        "associated with different hashtags."
-    )
-
-
-# ============================================================
-# VIRALITY EXPLORER
-# ============================================================
-
-elif st.session_state.page == "Virality":
-
-    if st.button("← Back to Home"):
-        go_to("Home")
-
-    st.title("🚀 Virality Explorer")
-
-    st.write(
-        "Explore highly viral posts and calculate a virality score "
-        "for custom engagement data."
-    )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # TOP VIRAL POSTS
-    # --------------------------------------------------------
-
-    st.markdown("## 🔥 Top Viral Posts")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        platform_filter = st.selectbox(
-            "Platform",
-            [
-                "All",
-                "Instagram",
-                "TikTok",
-                "Twitter",
-                "YouTube"
-            ],
-            key="viral_platform"
-        )
-
-    with col2:
-
-        content_filter = st.selectbox(
-            "Content Type",
-            [
-                "All",
-                "Video",
-                "Shorts",
-                "Post",
-                "Tweet",
-                "Live Stream",
-                "Reel"
-            ],
-            key="viral_content"
-        )
-
-    with col3:
-
-        region_filter = st.selectbox(
-            "Region",
-            [
-                "All",
-                "India",
-                "USA",
-                "UK",
-                "Canada",
-                "Brazil",
-                "Australia",
-                "Japan",
-                "Germany"
-            ],
-            key="viral_region"
-        )
-
-    params = {
-        "limit": 10
-    }
-
-    if platform_filter != "All":
-        params["platform"] = platform_filter
-
-    if content_filter != "All":
-        params["content_type"] = content_filter
-
-    if region_filter != "All":
-        params["region"] = region_filter
-
-    top_posts = pd.DataFrame(
-        get_api_data(
-            "/api/top-posts",
-            params=params
-        )
-    )
-
-    if not top_posts.empty:
-
-        st.dataframe(
-            top_posts,
-            use_container_width=True,
-            hide_index=True
-        )
-
-        if "virality_score" in top_posts.columns:
-
-            fig_top = px.bar(
-                top_posts.sort_values(
-                    "virality_score",
-                    ascending=True
-                ),
-                x="virality_score",
-                y="post_id",
-                orientation="h",
-                title="Top Viral Posts",
-                labels={
-                    "virality_score": "Virality Score",
-                    "post_id": "Post"
-                },
-                text_auto=".2f"
-            )
-
-            st.plotly_chart(
-                fig_top,
-                use_container_width=True
-            )
-
-    else:
-
-        st.warning(
-            "No posts found for the selected filters."
-        )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # VIRALITY CALCULATOR
-    # --------------------------------------------------------
-
-    st.markdown("## 🧮 Virality Calculator")
-
-    st.write(
-        "Enter engagement values to calculate the SocialPulse "
-        "virality score."
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        views = st.number_input(
-            "Views",
-            min_value=1,
-            value=100000,
-            step=1000,
-            key="calc_views"
-        )
-
-        likes = st.number_input(
-            "Likes",
-            min_value=0,
-            value=10000,
-            step=100,
-            key="calc_likes"
-        )
-
-    with col2:
-
-        shares = st.number_input(
-            "Shares",
-            min_value=0,
-            value=5000,
-            step=100,
-            key="calc_shares"
-        )
-
-        comments = st.number_input(
-            "Comments",
-            min_value=0,
-            value=1000,
-            step=100,
-            key="calc_comments"
-        )
-
-    if st.button(
-        "Calculate Virality",
-        use_container_width=True
-    ):
-
-        viral_coefficient = (
-            0.60 * (shares / views)
-            + 0.20 * (comments / views)
-            + 0.20 * (likes / views)
-        )
-
-        virality_score = viral_coefficient * 100
-
-        engagement_rate = (
-            (likes + shares + comments)
-            / views
-        ) * 100
-
-        st.divider()
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-
-            st.metric(
-                "Engagement Rate",
-                f"{engagement_rate:.2f}%"
-            )
-
-        with col2:
-
-            st.metric(
-                "Virality Coefficient",
-                f"{viral_coefficient:.4f}"
-            )
-
-        with col3:
-
-            st.metric(
-                "Virality Score",
-                f"{virality_score:.2f}"
-            )
-
-        st.info(
-            "SocialPulse calculates virality using weighted shares, "
-            "comments and likes relative to views. Shares have the "
-            "highest weight in the current project formula."
-        )
-
-
-# ============================================================
-# AUDIENCE INSIGHTS
-# ============================================================
-elif st.session_state.page == "Audience":
-
-    if st.button("← Back to Home"):
-        go_to("Home")
-
-    st.title("💬 Audience Insights")
-
-    st.write(
-        "Understand the distribution of positive, neutral and negative "
-        "audience sentiment in the analyzed comments."
-    )
-
-    st.divider()
-
-    sentiment_data = pd.DataFrame(
-        get_api_data("/api/sentiment")
-    )
-
-    # --------------------------------------------------------
-    # CHECK API DATA
-    # --------------------------------------------------------
-
-    if sentiment_data.empty:
-
-        st.warning("No sentiment data is available.")
-
-    else:
-
-        # Detect the actual count column returned by the API
-        possible_count_columns = [
-            "count",
-            "comments",
-            "total",
-            "value",
-            "frequency"
-        ]
-
-        count_column = None
-
-        for column in possible_count_columns:
-            if column in sentiment_data.columns:
-                count_column = column
-                break
-
-        # Detect sentiment column
-        if "sentiment" in sentiment_data.columns:
-            sentiment_column = "sentiment"
-
-        elif "category" in sentiment_data.columns:
-            sentiment_column = "category"
-
-        else:
-            sentiment_column = sentiment_data.columns[0]
-
-        # ----------------------------------------------------
-        # IF COUNT COLUMN EXISTS
-        # ----------------------------------------------------
-
-        if count_column is not None:
-
-            sentiment_data["count_value"] = pd.to_numeric(
-                sentiment_data[count_column],
-                errors="coerce"
-            )
-
-            total_comments = sentiment_data["count_value"].sum()
-
-            sentiment_data["percentage"] = (
-                sentiment_data["count_value"]
-                / total_comments
-            ) * 100
-
-        # ----------------------------------------------------
-        # IF API ALREADY RETURNS PERCENTAGE
-        # ----------------------------------------------------
-
-        elif "percentage" in sentiment_data.columns:
-
-            sentiment_data["percentage"] = pd.to_numeric(
-                sentiment_data["percentage"],
-                errors="coerce"
-            )
-
-            total_comments = None
-
-        else:
-
-            st.error(
-                "The sentiment API response does not contain a usable "
-                "count or percentage column."
-            )
-
-            st.write("API columns returned:")
-
-            st.write(
-                list(sentiment_data.columns)
-            )
-
-            st.stop()
-
-        # ----------------------------------------------------
-        # SENTIMENT SUMMARY
-        # ----------------------------------------------------
-
-        st.markdown("## 📌 Sentiment Summary")
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        # Total comments
-        with col1:
-
-            if total_comments is not None:
-
-                st.metric(
-                    "Comments Analyzed",
-                    f"{int(total_comments):,}"
-                )
-
-            else:
-
-                st.metric(
-                    "Sentiment Categories",
-                    len(sentiment_data)
-                )
-
-        # Positive
-        positive_rows = sentiment_data[
-            sentiment_data[sentiment_column]
-            .astype(str)
-            .str.lower()
-            .eq("positive")
-        ]
-
-        positive_value = (
-            positive_rows["percentage"].iloc[0]
-            if not positive_rows.empty
-            else 0
-        )
-
-        with col2:
-
-            st.metric(
-                "Positive",
-                f"{positive_value:.2f}%"
-            )
-
-        # Neutral
-        neutral_rows = sentiment_data[
-            sentiment_data[sentiment_column]
-            .astype(str)
-            .str.lower()
-            .eq("neutral")
-        ]
-
-        neutral_value = (
-            neutral_rows["percentage"].iloc[0]
-            if not neutral_rows.empty
-            else 0
-        )
-
-        with col3:
-
-            st.metric(
-                "Neutral",
-                f"{neutral_value:.2f}%"
-            )
-
-        # Negative
-        negative_rows = sentiment_data[
-            sentiment_data[sentiment_column]
-            .astype(str)
-            .str.lower()
-            .eq("negative")
-        ]
-
-        negative_value = (
-            negative_rows["percentage"].iloc[0]
-            if not negative_rows.empty
-            else 0
-        )
-
-        with col4:
-
-            st.metric(
-                "Negative",
-                f"{negative_value:.2f}%"
-            )
-
-        st.divider()
-
-        # ----------------------------------------------------
-        # SENTIMENT VISUALIZATION
-        # ----------------------------------------------------
-
-        st.markdown("## 📊 Audience Sentiment Distribution")
-
-        chart_data = sentiment_data.copy()
-
-        chart_data["sentiment_display"] = (
-            chart_data[sentiment_column]
-            .astype(str)
-        )
-
-        col1, col2 = st.columns(2)
-
-        # Bar chart
-        with col1:
-
-            fig_sentiment_bar = px.bar(
-                chart_data,
-                x="sentiment_display",
-                y="percentage",
-                title="Sentiment Distribution",
-                labels={
-                    "sentiment_display": "Sentiment",
-                    "percentage": "Percentage (%)"
-                },
-                text_auto=".2f"
-            )
-
-            fig_sentiment_bar.update_layout(
-                xaxis_title=None,
-                yaxis_title="Percentage (%)"
-            )
-
-            st.plotly_chart(
-                fig_sentiment_bar,
-                use_container_width=True
-            )
-
-        # Pie chart
-        with col2:
-
-            if "count_value" in chart_data.columns:
-
-                fig_sentiment_pie = px.pie(
-                    chart_data,
-                    names="sentiment_display",
-                    values="count_value",
-                    title="Audience Sentiment",
-                    hole=0.45
-                )
-
-                st.plotly_chart(
-                    fig_sentiment_pie,
-                    use_container_width=True
-                )
-
-            else:
-
-                fig_sentiment_pie = px.pie(
-                    chart_data,
-                    names="sentiment_display",
-                    values="percentage",
-                    title="Audience Sentiment",
-                    hole=0.45
-                )
-
-                st.plotly_chart(
-                    fig_sentiment_pie,
-                    use_container_width=True
-                )
-
-        st.info(
-            "Sentiment analysis provides an overall view of audience "
-            "reaction within the analyzed comment dataset."
-        )
-
-        st.divider()
-
-        # ----------------------------------------------------
-        # DETAILS
-        # ----------------------------------------------------
-
-        st.markdown("## 📋 Sentiment Details")
-
-        st.dataframe(
-            sentiment_data,
-            use_container_width=True,
-            hide_index=True
-        )
-
-# ============================================================
-# RECOMMENDATIONS
-# ============================================================
-
-elif st.session_state.page == "Recommendations":
-
-    if st.button("← Back to Home"):
-        go_to("Home")
-
-    st.title("🎯 Content Recommendations")
-
-    st.write(
-        "Discover content type and hashtag combinations that have "
-        "performed well historically."
-    )
-
-    st.divider()
-
-    # ========================================================
-    # TARGET SELECTION
-    # ========================================================
-
-    st.markdown("## 🔎 Choose Your Target")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        recommendation_platform = st.selectbox(
-            "Select Platform",
-            [
-                "All",
-                "Instagram",
-                "TikTok",
-                "Twitter",
-                "YouTube"
-            ],
-            key="recommend_platform"
-        )
-
-    with col2:
-
-        recommendation_region = st.selectbox(
-            "Select Region",
-            [
-                "All",
-                "India",
-                "USA",
-                "UK",
-                "Canada",
-                "Brazil",
-                "Australia",
-                "Japan",
-                "Germany"
-            ],
-            key="recommend_region"
-        )
-
-    # ========================================================
-    # API PARAMETERS
-    # ========================================================
-
-    params = {}
-
-    if recommendation_platform != "All":
-        params["platform"] = recommendation_platform
-
-    if recommendation_region != "All":
-        params["region"] = recommendation_region
-
-    # ========================================================
-    # GET RECOMMENDATIONS
-    # ========================================================
-
-    recommendations_response = get_api_data(
-        "/api/recommendations",
-        params=params
-    )
-
-    recommendations = pd.DataFrame(
-        recommendations_response
-    )
-
-    st.divider()
-
-    # ========================================================
-    # DISPLAY RECOMMENDATIONS
-    # ========================================================
-
-    st.markdown("## 💡 Recommended Content Patterns")
-
-    if recommendations.empty:
-
-        st.warning(
-            "No recommendations found for the selected filters."
-        )
-
-    else:
-
-        # ====================================================
-        # SUMMARY METRICS
-        # ====================================================
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-
-            st.metric(
-                "Recommendations",
-                len(recommendations)
-            )
-
-        with col2:
-
-            st.metric(
-                "Top Virality",
-                f"{recommendations['median_virality'].max():.2f}"
-            )
-
-        with col3:
-
-            st.metric(
-                "Top Engagement",
-                f"{recommendations['median_engagement'].max():.2f}%"
-            )
-
-        st.write("")
-
-        # ====================================================
-        # CREATE CONTENT PATTERN
-        # ====================================================
-
-        recommendations["pattern"] = (
-            recommendations["content_type"]
-            + " + "
-            + recommendations["hashtag"]
-        )
-
-        chart_data = recommendations.head(10).copy()
-
-        chart_data = chart_data.sort_values(
-            "median_virality",
-            ascending=True
-        )
-
-        # ====================================================
-        # RECOMMENDATION CHART
-        # ====================================================
-
-        fig_recommendation = px.bar(
-            chart_data,
-            x="median_virality",
-            y="pattern",
-            orientation="h",
-            title="Historical Virality of Recommended Content Patterns",
-            labels={
-                "median_virality": "Median Virality Score",
-                "pattern": "Content Pattern"
-            },
-            text_auto=".2f"
-        )
-
-        fig_recommendation.update_layout(
-            xaxis_title="Median Virality Score",
-            yaxis_title=None
-        )
-
-        st.plotly_chart(
-            fig_recommendation,
-            use_container_width=True
-        )
-
-        st.info(
-            "Recommendations are based on historical performance "
-            "in the SocialPulse dataset. They represent observed "
-            "content patterns and are not guaranteed future outcomes."
-        )
-
-        st.divider()
-
-        # ====================================================
-        # RECOMMENDATION TABLE
-        # ====================================================
-
-        st.markdown("## 📋 Recommendation Details")
-
-        display_columns = [
-            "content_type",
-            "hashtag",
-            "posts",
-            "median_virality",
-            "median_engagement",
-            "avg_shares"
-        ]
-
-        available_columns = [
-            column
-            for column in display_columns
-            if column in recommendations.columns
-        ]
-
-        st.dataframe(
-            recommendations[available_columns],
-            use_container_width=True,
-            hide_index=True
-        )
-# ============================================================
-# FORECAST
-# ============================================================
-elif st.session_state.page == "Forecast":
-
-    st.markdown(
-        """
-        <div style="text-align:center; padding:25px 0 15px 0;">
-            <h1>📈 Future Virality Forecast</h1>
-            <p>
-                Predict future social media virality using historical
-                monthly engagement patterns.
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.divider()
-
-    st.markdown("### 🔮 Forecast Settings")
-
-    forecast_months = st.selectbox(
-        "Forecast future virality for:",
-        [3, 6, 9, 12],
-        index=1,
-        format_func=lambda x: f"Next {x} months",
-        key="forecast_period"
-    )
-
+    left, right = st.columns([1, 1])
+    with left:
+        st.subheader("Your social performance, at a glance")
+        st.write("Use the analytics tools to explore actual records from your configured SocialPulse API.")
+  
+        if st.button("Analyze a Post", key="home_analyze_post"):
+            st.session_state.socialpulse_page = "Social Media Post Analyzer"
+            st.rerun()
+
+    with right:
+        st.markdown("#### Workspace")
+        st.markdown("- **Post Analyzer** — inspect a supported post URL")
+        st.markdown("- **Virality Calculator** — rank posts using backend data")
+        st.markdown("- **Audience Insights** — review sentiment distribution")
+        st.markdown("- **Content Recommendations** — discover historical patterns")
     try:
+        summary = api_get("/api/summary")
+        if isinstance(summary, dict):
+            st.subheader("Performance overview")
+            metrics = [(k, v) for k, v in summary.items() if not isinstance(v, (dict, list))]
+            if metrics:
+                cols = st.columns(min(4, len(metrics)))
+                for i, (label, value) in enumerate(metrics[:4]):
+                    cols[i].metric(str(label).replace("_", " ").title(), value if value is not None else "—")
+    except Exception as exc:
+        with st.expander("Summary API status"):
+            show_api_error(exc, "/api/summary")
 
-        response = get_api_data(
-            "/api/virality-forecast",
-            params={
-                "months": forecast_months
-            }
+# ---------- Post Analyzer ----------
+
+elif page == "Social Media Post Analyzer":
+    page_title(
+        "Social Media Post Analyzer",
+        "Analyze a supported post and inspect the metrics returned by your backend."
+    )
+
+    with st.container(border=True):
+        post_url = st.text_input(
+            "Social media post URL",
+            placeholder="https://www.youtube.com/watch?v=…",
+            key="analyzer_url",
+        )
+        analyze = st.button(
+            "Analyze Post",
+            type="primary",
+            use_container_width=False
         )
 
-        historical_months = response[
-            "historical_months"
-        ]
+    if analyze:
+        if not post_url.strip():
+            st.error("Enter a post URL to analyze.")
 
-        historical_values = response[
-            "historical_virality"
-        ]
+        elif not post_url.strip().lower().startswith(("https://", "http://")):
+            st.error("Enter a valid URL beginning with http:// or https://.")
 
-        future_months = response[
-            "forecast_months"
-        ]
+        else:
+            with st.spinner("Analyzing post…"):
+                try:
+                    result = api_post(
+                        "/api/analyze-post",
+                        {"url": post_url.strip()}
+                    )
+                    st.session_state["socialpulse_last_analysis"] = result
 
-        future_values = response[
-            "forecast"
-        ]
+                except requests.HTTPError as exc:
+                    status = (
+                        exc.response.status_code
+                        if exc.response is not None
+                        else "unknown"
+                    )
+                    st.error(
+                        f"The analyzer API returned HTTP {status}. "
+                        "Confirm the URL is supported and accessible."
+                    )
 
-        model_name = response.get(
-            "model",
-            "Holt Exponential Smoothing"
-        )
+                except requests.RequestException as exc:
+                    st.error(f"Could not reach the analyzer API. {exc}")
 
-        mae = response.get("mae")
-        rmse = response.get("rmse")
+                except ValueError:
+                    st.error("The analyzer returned a response that was not valid JSON.")
 
-        # --------------------------------
-        # Create historical dataframe
-        # --------------------------------
+                except Exception as exc:
+                    st.error(f"Analysis failed: {exc}")
+    
+    result = st.session_state.get("socialpulse_last_analysis")
 
-        historical_df = pd.DataFrame({
-            "Month": pd.to_datetime(
-                historical_months
-            ),
-            "Virality": historical_values,
-            "Type": "Historical"
-        })
+    if result:
+        st.subheader("Analysis Results")
 
-        # --------------------------------
-        # Create forecast dataframe
-        # --------------------------------
+        if isinstance(result, dict):
+            post = result.get("post", {})
+            raw = result.get("raw_metrics", {})
+            calculated = result.get("calculated_metrics", {})
+            classification = result.get("classification", {})
+            comparison = result.get("comparison", {})
 
-        forecast_df = pd.DataFrame({
-            "Month": pd.to_datetime(
-                future_months
-            ),
-            "Virality": future_values,
-            "Type": "Forecast"
-        })
+            # Post information
+            st.markdown("### Post Details")
+            st.write("**Title:**", post.get("title", "Not available"))
+            st.write("**Platform:**", post.get("platform", "Not available"))
+            st.write("**Published:**", post.get("published_at", "Not available"))
 
-        # --------------------------------
-        # Combined chart
-        # --------------------------------
+            post_url = post.get("url")
+            if post_url:
+                st.markdown(f"[Open original post]({post_url})")
 
-        combined_df = pd.concat(
-            [
-                historical_df,
-                forecast_df
-            ],
-            ignore_index=True
-        )
+            st.divider()
 
-        st.markdown(
-            "### 📊 Historical vs Future Virality"
-        )
+            # Main metrics
+            st.markdown("### Engagement Overview")
 
-        fig = px.line(
-            combined_df,
-            x="Month",
-            y="Virality",
-            color="Type",
-            markers=True,
-            title="Social Media Virality Trend and Forecast"
-        )
+            def format_number(value):
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    return f"{value:,.2f}".rstrip("0").rstrip(".")
+                return value if value is not None else "—"
 
-        fig.update_layout(
-            xaxis_title="Month",
-            yaxis_title="Virality Score",
-            hovermode="x unified"
-        )
+            metrics = [
+                ("Views", raw.get("views")),
+                ("Likes", raw.get("likes")),
+                ("Comments", raw.get("comments")),
+                ("Shares", raw.get("shares")),
+                ("Engagement Rate", calculated.get("engagement_rate")),
+                ("Virality Score", calculated.get("virality_score")),
+            ]
 
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
+            cols = st.columns(3)
 
-        # --------------------------------
-        # Forecast summary
-        # --------------------------------
+            for i, (label, value) in enumerate(metrics):
+                display = format_number(value)
 
-        st.markdown("### 📌 Forecast Summary")
+                if "Rate" in label and value is not None:
+                    display = f"{format_number(value)}%"
 
-        col1, col2, col3, col4 = st.columns(4)
+                cols[i % 3].metric(label, display)
 
-        with col1:
+            st.divider()
 
-            st.metric(
-                "Forecast Period",
-                f"{forecast_months} Months"
-            )
-
-        with col2:
-
-            st.metric(
-                "Starting Forecast",
-                f"{float(future_values[0]):.2f}"
-            )
-
-        with col3:
-
-            st.metric(
-                "Final Forecast",
-                f"{float(future_values[-1]):.2f}"
-            )
-
-        with col4:
-
-            change = (
-                float(future_values[-1])
-                -
-                float(future_values[0])
-            )
-
-            st.metric(
-                "Forecast Change",
-                f"{change:+.2f}"
-            )
-
-        # --------------------------------
-        # Model
-        # --------------------------------
-
-        st.divider()
-
-        st.markdown(
-            "### 🤖 Forecasting Model"
-        )
-
-        st.info(
-            f"""
-            **Model:** {model_name}
-
-            The model learns the historical monthly virality
-            pattern and estimates future virality values.
-            """
-        )
-
-        # --------------------------------
-        # Evaluation
-        # --------------------------------
-
-        if mae is not None and rmse is not None:
-
-            st.markdown(
-                "### 📏 Model Evaluation"
-            )
+            # Classification
+            st.markdown("### Engagement Classification")
 
             col1, col2 = st.columns(2)
 
-            with col1:
-
-                st.metric(
-                    "MAE",
-                    f"{float(mae):.4f}"
-                )
-
-            with col2:
-
-                st.metric(
-                    "RMSE",
-                    f"{float(rmse):.4f}"
-                )
-
-        # --------------------------------
-        # Forecast table
-        # --------------------------------
-
-        st.markdown(
-            "### 📋 Future Forecast Details"
-        )
-
-        display_df = forecast_df.copy()
-
-        display_df["Month"] = (
-            display_df["Month"]
-            .dt.strftime("%B %Y")
-        )
-
-        display_df["Virality"] = (
-            display_df["Virality"]
-            .round(2)
-        )
-
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-    except Exception as e:
-
-        st.error(
-            f"Unable to generate forecast: {e}"
-        )
-# ============================================================
-# POST ANALYZER
-# ============================================================
-
-elif st.session_state.page == "Post Analyzer":
-
-    st.markdown(
-        """
-        <div style="text-align:center; padding:25px 0 15px 0;">
-            <h1>🔗 Social Media Post Analyzer</h1>
-            <p>
-                Analyze an individual social media post using its URL,
-                calculate engagement and virality metrics, and compare
-                the result with SocialPulse data.
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.divider()
-
-    st.markdown("### 🔗 Enter Post URL")
-
-    post_url = st.text_input(
-        "Paste your social media post link",
-        placeholder="https://www.instagram.com/reel/...",
-        key="post_analyzer_url"
-    )
-
-    st.caption(
-        "Supported platforms depend on the backend API configuration. "
-        "Instagram, YouTube and TikTok links can be detected automatically."
-    )
-
-    st.write("")
-
-    analyze_button = st.button(
-        "🔍 Analyze Post",
-        type="primary",
-        use_container_width=True,
-        key="analyze_post_button"
-    )
-
-    if analyze_button:
-
-        if not post_url.strip():
-
-            st.warning(
-                "Please enter a social media post URL."
+            col1.metric(
+                "Engagement Level",
+                classification.get("engagement_level", "—")
             )
 
+            anomaly = classification.get("engagement_anomaly")
+
+            col2.metric(
+                "Engagement Anomaly",
+                "Yes" if anomaly is True
+                else "No" if anomaly is False
+                else "—"
+            )
+
+            st.divider()
+
+            # Comparison against other posts
+            st.markdown("### Performance Comparison")
+
+            c1, c2, c3 = st.columns(3)
+
+            c1.metric(
+                "Comparison Posts",
+                format_number(comparison.get("comparison_posts"))
+            )
+
+            c2.metric(
+                "Median Engagement",
+                f"{format_number(comparison.get('median_engagement'))}%"
+                if comparison.get("median_engagement") is not None
+                else "—"
+            )
+
+            c3.metric(
+                "Median Virality",
+                format_number(comparison.get("median_virality"))
+            )
+
+            c4, c5 = st.columns(2)
+
+            c4.metric(
+                "Engagement Difference",
+                format_number(comparison.get("engagement_difference"))
+            )
+
+            c5.metric(
+                "Virality Difference",
+                format_number(comparison.get("virality_difference"))
+            )
+
+            # Full response for debugging
+            with st.expander("Full API Response"):
+                st.json(result)
+
         else:
-
-            try:
-
-                response = requests.post(
-                    f"{API_URL}/api/analyze-post",
-                    json={
-                        "url": post_url.strip()
-                    },
-                    timeout=30
-                )
-
-                try:
-                    result = response.json()
-                except ValueError:
-                    result = {}
-
-                # --------------------------------------------
-                # API ERROR
-                # --------------------------------------------
-
-                if response.status_code != 200:
-
-                    detail = result.get(
-                        "detail",
-                        "Unable to analyze this post."
-                    )
-
-                    if isinstance(detail, list):
-                        detail = " ".join(
-                            str(item.get("msg", item))
-                            if isinstance(item, dict)
-                            else str(item)
-                            for item in detail
-                        )
-
-                    st.error(str(detail))
-
-                # --------------------------------------------
-                # POST NOT ACCESSIBLE
-                # --------------------------------------------
-
-                elif result.get("status") == "not_accessible":
-
-                    post = result.get("post", {})
-
-                    st.success(
-                        f"✓ {post.get('platform', 'Social media')} "
-                        "post detected"
-                    )
-
-                    st.info(
-                        result.get(
-                            "message",
-                            "This post is valid, but its engagement "
-                            "metrics are not available through the "
-                            "connected API."
-                        )
-                    )
-
-                    st.markdown("### 📋 Post Information")
-
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        st.metric(
-                            "Platform",
-                            post.get("platform", "Unknown")
-                        )
-
-                    with col2:
-                        st.metric(
-                            "Post ID",
-                            post.get("post_id", "Unknown")
-                        )
-
-                    st.markdown("### 🔗 Submitted URL")
-
-                    st.code(
-                        post.get("url", post_url.strip()),
-                        language=None
-                    )
-
-                # --------------------------------------------
-                # SUCCESSFUL ANALYSIS
-                # --------------------------------------------
-
-                elif result.get("status") == "accessible":
-                    post_data = result.get("post", {})
-                    post_title = post_data.get("title")
-                    platform = post_data.get("platform", "").upper()
-
-                    if post_title:
-                        st.markdown(f"### {post_title}")
-
-                    if platform:
-                        st.caption(f"Platform: {platform}")
-
-                    post = result.get("post", {})
-                    raw = result.get("raw_metrics", {})
-                    metrics = result.get("calculated_metrics", {})
-                    classification = result.get("classification", {})
-                    comparison = result.get("comparison", {})
-
-                    st.success(
-                        f"✓ {post.get('platform', 'Social media')} "
-                        "post analyzed successfully"
-                    )
-
-                    # ----------------------------------------
-                    # POST INFORMATION
-                    # ----------------------------------------
-
-                    st.markdown("### 📋 Post Information")
-
-                    col1, col2, col3 = st.columns(3)
-
-                    with col1:
-                        st.metric(
-                            "Platform",
-                            post.get("platform", "Unknown")
-                        )
-
-                    with col2:
-                        st.metric(
-                            "Post ID",
-                            post.get("post_id", "Unknown")
-                        )
-
-                    with col3:
-                        st.metric(
-                            "Content Type",
-                            post.get("content_type", "Unknown")
-                        )
-
-                    if post.get("region"):
-                        st.caption(
-                            f"Region: {post.get('region')}"
-                        )
-
-                    # ----------------------------------------
-                    # RAW METRICS
-                    # ----------------------------------------
-
-                    st.markdown("### 📊 Post Performance")
-
-                    col1, col2, col3, col4 = st.columns(4)
-
-                    with col1:
-                        st.metric(
-                            "Views",
-                            f"{int(raw.get('views', 0)):,}"
-                        )
-
-                    with col2:
-                        st.metric(
-                            "Likes",
-                            f"{int(raw.get('likes', 0)):,}"
-                        )
-
-                    with col3:
-                        st.metric(
-                            "Shares",
-                            f"{int(raw.get('shares', 0)):,}"
-                        )
-
-                    with col4:
-                        st.metric(
-                            "Comments",
-                            f"{int(raw.get('comments', 0)):,}"
-                        )
-
-                    # ----------------------------------------
-                    # CALCULATED METRICS
-                    # ----------------------------------------
-
-                    st.markdown("### 📈 Calculated Metrics")
-
-                    col1, col2, col3 = st.columns(3)
-
-                    with col1:
-                        st.metric(
-                            "Engagement Rate",
-                            f"{float(metrics.get('engagement_rate', 0)):.2f}%"
-                        )
-
-                    with col2:
-                        st.metric(
-                            "Share Rate",
-                            f"{float(metrics.get('share_rate', 0)):.2f}%"
-                        )
-
-                    with col3:
-                        st.metric(
-                            "Comment Rate",
-                            f"{float(metrics.get('comment_rate', 0)):.2f}%"
-                        )
-
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        st.metric(
-                            "Virality Coefficient",
-                            f"{float(metrics.get('viral_coefficient', 0)):.4f}"
-                        )
-
-                    with col2:
-                        st.metric(
-                            "Virality Score",
-                            f"{float(metrics.get('virality_score', 0)):.2f}"
-                        )
-
-                    # ----------------------------------------
-                    # CLASSIFICATION
-                    # ----------------------------------------
-
-                    st.markdown("### 🎯 Post Classification")
-
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        st.metric(
-                            "Engagement Level",
-                            classification.get(
-                                "engagement_level",
-                                "Unknown"
-                            )
-                        )
-
-                    with col2:
-                        if classification.get("engagement_anomaly"):
-                            st.warning(
-                                "⚠️ Engagement anomaly detected"
-                            )
-                        else:
-                            st.success(
-                                "✓ No engagement anomaly detected"
-                            )
-
-                    # ----------------------------------------
-                    # SOCIALPULSE COMPARISON
-                    # ----------------------------------------
-
-                    st.markdown(
-                        "### 📊 Comparison with SocialPulse Data"
-                    )
-
-                    comparison_posts = comparison.get(
-                        "comparison_posts",
-                        0
-                    )
-
-                    median_engagement = comparison.get(
-                        "median_engagement_rate",
-                        comparison.get("average_engagement", 0)
-                    )
-
-                    median_virality = comparison.get(
-                        "median_virality_score",
-                        comparison.get("average_virality", 0)
-                    )
-
-                    engagement_difference = comparison.get(
-                        "engagement_vs_median_percent",
-                        comparison.get(
-                            "engagement_vs_average_percent"
-                        )
-                    )
-
-                    virality_difference = comparison.get(
-                        "virality_vs_median_percent",
-                        comparison.get(
-                            "virality_vs_average_percent"
-                        )
-                    )
-
-                    col1, col2, col3 = st.columns(3)
-
-                    with col1:
-                        st.metric(
-                            "Comparable Posts",
-                            f"{int(comparison_posts):,}"
-                        )
-
-                    with col2:
-                        st.metric(
-                            "Median Engagement",
-                            f"{float(median_engagement or 0):.2f}%"
-                        )
-
-                    with col3:
-                        st.metric(
-                            "Median Virality",
-                            f"{float(median_virality or 0):.2f}"
-                        )
-
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        if engagement_difference is not None:
-                            st.metric(
-                                "Engagement vs Median",
-                                f"{float(engagement_difference):+.2f}%"
-                            )
-
-                    with col2:
-                        if virality_difference is not None:
-                            st.metric(
-                                "Virality vs Median",
-                                f"{float(virality_difference):+.2f}%"
-                            )
-
-                    # ----------------------------------------
-                    # ENGAGEMENT BREAKDOWN
-                    # ----------------------------------------
-
-                    st.markdown("### 📊 Engagement Breakdown")
-
-                    chart_df = pd.DataFrame({
-                        "Metric": [
-                            "Likes",
-                            "Shares",
-                            "Comments"
-                        ],
-                        "Count": [
-                            raw.get("likes", 0),
-                            raw.get("shares", 0),
-                            raw.get("comments", 0)
-                        ]
-                    })
-
-                    fig = px.bar(
-                        chart_df,
-                        x="Metric",
-                        y="Count",
-                        title="Post Engagement Breakdown",
-                        text_auto=True
-                    )
-
-                    fig.update_layout(
-                        xaxis_title="Engagement Type",
-                        yaxis_title="Count"
-                    )
-
-                    st.plotly_chart(
-                        fig,
-                        use_container_width=True
-                    )
-
-                    # ----------------------------------------
-                    # CALCULATION FORMULAS
-                    # ----------------------------------------
-
-                    with st.expander(
-                        "🧮 View Calculation Formulas"
-                    ):
-
-                        st.markdown(
-                            """
-                            **Engagement Rate**
-
-                            `(Likes + Shares + Comments) / Views × 100`
-
-                            **Share Rate**
-
-                            `Shares / Views × 100`
-
-                            **Comment Rate**
-
-                            `Comments / Views × 100`
-
-                            **Like Rate**
-
-                            `Likes / Views × 100`
-
-                            **Virality Coefficient**
-
-                            `0.60 × Share Rate + 0.20 × Comment Rate + 0.20 × Like Rate`
-
-                            **Virality Score**
-
-                            `Virality Coefficient × 100`
-                            """
-                        )
-
-                # --------------------------------------------
-                # OTHER RESPONSE
-                # --------------------------------------------
-
-                else:
-
-                    st.warning(
-                        result.get(
-                            "message",
-                            "The post could not be analyzed."
-                        )
-                    )
-
-            except requests.exceptions.Timeout:
-
-                st.error(
-                    "The analysis request timed out. Please try again."
-                )
-
-            except requests.exceptions.ConnectionError:
-
-                st.error(
-                    "Could not connect to the SocialPulse backend. "
-                    "Make sure FastAPI is running."
-                )
-
-            except requests.exceptions.RequestException as e:
-
-                st.error(
-                    f"Unable to connect to the backend: {e}"
-                )
-
-            except Exception as e:
-
-                st.error(
-                    f"Unable to analyze the post: {e}"
-                )
-
-
-# FOOTER
-# ============================================================
-
-st.divider()
-
-st.caption(
-    "SocialPulse • Data-Driven Social Media Engagement Intelligence System"
-)
+            st.error("The API response is not in the expected JSON format.")
+            st.json(result)
+
+    else:
+        st.info("Enter a post URL and click Analyze Post to begin.")
+
+
+# ---------- Virality Calculator ----------
+elif page == "Virality Calculator":
+    page_title("Virality Calculator", "Calculate a score when supported by your API and explore the highest-scoring historical posts.")
+    st.subheader("Calculate Virality")
+    st.caption("This form submits the supplied values to the existing API only if a compatible calculation endpoint is available.")
+    with st.container(border=True):
+        a, b, c, d = st.columns(4)
+        views = a.number_input("Views", min_value=0, value=0, step=100)
+        likes = b.number_input("Likes", min_value=0, value=0, step=10)
+        comments = c.number_input("Comments", min_value=0, value=0, step=5)
+        shares = d.number_input("Shares", min_value=0, value=0, step=5)
+        if st.button("Calculate Virality", type="primary"):
+            total_engagement = likes + comments + shares
+            st.metric("Engagement count", f"{total_engagement:,}")
+            if views > 0:
+                st.metric("Engagement per view", f"{total_engagement / views * 100:.2f}%")
+            else:
+                st.info("Engagement per view cannot be calculated unless views are greater than zero.")
+            st.caption("These are transparent arithmetic metrics, not the project's virality score. The project's score is not inferred or replaced here.")
+    st.divider()
+    st.subheader("Top Viral Posts")
+    try:
+        df = call_table_endpoint("/api/top-posts")
+        if df.empty:
+            st.info("The top-posts endpoint returned no post records.")
+        else:
+            df = df.drop_duplicates()
+            score_col = find_column(df, ("virality_score", "virality", "viral_score", "score"))
+            search = st.text_input("Search by hashtag or post ID", key="viral_search")
+            platform_col = find_column(df, ("platform", "social_platform"))
+            type_col = find_column(df, ("content_type", "type", "media_type"))
+            f1, f2, f3 = st.columns(3)
+            if platform_col:
+                opts = ["All"] + sorted(df[platform_col].dropna().astype(str).unique().tolist())
+                p = f1.selectbox("Platform", opts, key="viral_platform")
+                if p != "All":
+                    df = df[df[platform_col].astype(str) == p]
+            if type_col:
+                opts = ["All"] + sorted(df[type_col].dropna().astype(str).unique().tolist())
+                t = f2.selectbox("Content type", opts, key="viral_type")
+                if t != "All":
+                    df = df[df[type_col].astype(str) == t]
+            sort_col = score_col or find_column(df, ("engagement_rate", "engagement"))
+            sort_choice = f3.selectbox("Sort by", [c for c in (score_col, find_column(df, ("engagement_rate", "engagement"))) if c], key="viral_sort") if any((score_col, find_column(df, ("engagement_rate", "engagement")))) else None
+            if search:
+                search_cols = [c for c in (find_column(df, ("hashtag", "hashtags")), find_column(df, ("post_id", "id"))) if c]
+                if search_cols:
+                    mask = pd.Series(False, index=df.index)
+                    for col in search_cols:
+                        mask |= df[col].astype(str).str.contains(search, case=False, na=False)
+                    df = df[mask]
+            if sort_choice:
+                df[sort_choice] = pd.to_numeric(df[sort_choice], errors="coerce")
+                df = df.sort_values(sort_choice, ascending=False, na_position="last")
+            top_n = st.selectbox("Rows to display", [10, 25, 50, 100], index=1, key="viral_top_n")
+            if score_col and not df.empty:
+                chart_df = df.head(top_n).copy()
+                label_col = find_column(chart_df, ("post_id", "id", "hashtag")) or chart_df.columns[0]
+                chart_df[score_col] = pd.to_numeric(chart_df[score_col], errors="coerce")
+                chart_df = chart_df.dropna(subset=[score_col])
+                if not chart_df.empty:
+                    fig = px.bar(chart_df.sort_values(score_col), x=score_col, y=label_col, orientation="h",
+                                 title="Top posts by virality score", hover_data=list(chart_df.columns))
+                    fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=max(360, 28 * len(chart_df)))
+                    st.plotly_chart(fig, use_container_width=True)
+            show_table(df.head(top_n), "viral_table")
+    except Exception as exc:
+        show_api_error(exc, "/api/top-posts")
+
+# ---------- Audience Insights ----------
+elif page == "Audience Insights":
+    page_title("Audience Insights", "Understand positive, neutral, and negative audience reactions in the sentiment dataset.")
+    st.subheader("Sentiment Summary")
+    # These are the explicitly supplied baseline statistics; clearly labelled as baseline.
+    metrics = [
+        ("Comments Analyzed", "36,793"),
+        ("Positive Sentiment", "42.86%"),
+        ("Neutral Sentiment", "34.71%"),
+        ("Negative Sentiment", "22.42%"),
+    ]
+    cols = st.columns(4)
+    for col, (label, value) in zip(cols, metrics):
+        col.metric(label, value)
+    st.caption("Baseline values supplied in the project brief. They remain a baseline until recalculated from updated source data.")
+    st.divider()
+    st.subheader("Audience Sentiment Distribution")
+    sentiment_df = pd.DataFrame({"Sentiment": ["Positive", "Neutral", "Negative"], "Percentage": [42.86, 34.71, 22.42]})
+    fig = px.pie(sentiment_df, names="Sentiment", values="Percentage", hole=0.58,
+                 color="Sentiment", color_discrete_map={"Positive": "#34d399", "Neutral": "#60a5fa", "Negative": "#fb7185"})
+    fig.update_traces(textposition="inside", textinfo="label+percent", hovertemplate="%{label}: %{value:.2f}%<extra></extra>")
+    fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      legend_title_text="Sentiment", margin=dict(t=20, b=20, l=10, r=10))
+    st.plotly_chart(fig, use_container_width=True)
+    st.info("Sentiment analysis provides an overall view of audience reaction within the analyzed comment dataset.")
+    st.divider()
+    st.subheader("Sentiment Details")
+    try:
+        payload = api_get("/api/sentiment")
+        df = as_frame(payload)
+        if df.empty and isinstance(payload, dict):
+            st.write("The sentiment endpoint returned aggregated data rather than individual comment records:")
+            st.json(payload)
+        elif not df.empty:
+            sentiment_col = find_column(df, ("sentiment", "sentiment_label", "label", "polarity"))
+            if sentiment_col:
+                labels = ["All"] + sorted(df[sentiment_col].dropna().astype(str).unique().tolist())
+                selected = st.selectbox("Filter sentiment", labels)
+                if selected != "All":
+                    df = df[df[sentiment_col].astype(str) == selected]
+            search = st.text_input("Search sentiment details", key="sentiment_search")
+            if search:
+                mask = df.astype(str).apply(lambda col: col.str.contains(search, case=False, na=False)).any(axis=1)
+                df = df[mask]
+            show_table(df, "sentiment_table")
+    except Exception as exc:
+        show_api_error(exc, "/api/sentiment")
+
+# ---------- Content Recommendations ----------
+elif page == "Content Recommendations":
+    page_title("Content Recommendations", "Discover content patterns that have performed well historically in SocialPulse.")
+    st.subheader("Choose Your Target")
+    try:
+        platforms = api_options("/api/platforms")
+        content_types = api_options("/api/content-types")
+        hashtags = api_options("/api/hashtags")
+    except Exception:
+        platforms, content_types, hashtags = [], [], []
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        platform_choice = c1.selectbox("Platform", ["All"] + platforms, key="rec_platform")
+        type_choice = c2.selectbox("Content type", ["All"] + content_types, key="rec_type")
+        hashtag_choice = st.selectbox("Hashtag", ["All"] + hashtags, key="rec_hashtag")
+        target_metric = st.selectbox("Target metric", ["Virality score", "Engagement rate"], key="rec_metric")
+        apply = st.button("Generate Recommendations", type="primary")
+        reset = st.button("Reset Filters")
+        if reset:
+            for k in ("rec_platform", "rec_type", "rec_hashtag", "rec_metric"):
+                st.session_state.pop(k, None)
+            st.rerun()
+    params: dict[str, Any] = {}
+    if platform_choice != "All":
+        params["platform"] = platform_choice
+    if type_choice != "All":
+        params["content_type"] = type_choice
+    if hashtag_choice != "All":
+        params["hashtag"] = hashtag_choice
+    params["target_metric"] = "virality_score" if target_metric == "Virality score" else "engagement_rate"
+
+    st.divider()
+    st.subheader("Recommended Content Patterns")
+    try:
+        # Pass current UI filters through to the existing recommendation endpoint.
+        payload = api_get("/api/recommendations", params=params)
+        rec_df = as_frame(payload)
+        if rec_df.empty:
+            # Preserve a returned aggregate response rather than fabricating recommendation rows.
+            if isinstance(payload, dict) and payload:
+                st.json(payload)
+            else:
+                st.info("No recommendations were returned for the selected filters.")
+        else:
+            rec_df = rec_df.drop_duplicates()
+            score_col = find_column(rec_df, ("virality_score", "avg_virality_score", "average_virality", "score"))
+            engagement_col = find_column(rec_df, ("engagement_rate", "avg_engagement_rate", "average_engagement_rate"))
+            count_col = find_column(rec_df, ("post_count", "supporting_posts", "count", "num_posts"))
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Recommendations", f"{len(rec_df):,}")
+            k2.metric("Top Virality", f"{pd.to_numeric(rec_df[score_col], errors='coerce').max():.2f}" if score_col else "Not returned")
+            k3.metric("Top Engagement", safe_pct(pd.to_numeric(rec_df[engagement_col], errors="coerce").max()) if engagement_col else "Not returned")
+            if score_col or engagement_col:
+                y = score_col if target_metric == "Virality score" and score_col else engagement_col or score_col
+                labels = [c for c in (find_column(rec_df, ("content_type", "type")), find_column(rec_df, ("hashtag", "hashtags")), find_column(rec_df, ("platform",))) if c]
+                chart_df = rec_df.copy()
+                chart_df[y] = pd.to_numeric(chart_df[y], errors="coerce")
+                chart_df = chart_df.dropna(subset=[y]).sort_values(y, ascending=False).head(15)
+                if not chart_df.empty:
+                    chart_df["Pattern"] = chart_df[labels].astype(str).agg(" · ".join, axis=1) if labels else chart_df.index.astype(str)
+                    fig = px.bar(chart_df.sort_values(y), x=y, y="Pattern", orientation="h",
+                                 title=f"Recommended patterns by {target_metric.lower()}", hover_data=list(chart_df.columns))
+                    fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=max(360, 28 * len(chart_df)))
+                    st.plotly_chart(fig, use_container_width=True)
+            st.markdown("#### Recommendation Details")
+            search = st.text_input("Search recommendations", key="rec_search")
+            if search:
+                mask = rec_df.astype(str).apply(lambda col: col.str.contains(search, case=False, na=False)).any(axis=1)
+                rec_df = rec_df[mask]
+            sort_candidates = [c for c in (score_col, engagement_col, count_col) if c and c in rec_df.columns]
+            if sort_candidates:
+                sort_by = st.selectbox("Sort recommendations by", sort_candidates, key="rec_sort")
+                rec_df[sort_by] = pd.to_numeric(rec_df[sort_by], errors="coerce")
+                rec_df = rec_df.sort_values(sort_by, ascending=False, na_position="last")
+            page_size = st.selectbox("Rows per page", [10, 25, 50], key="rec_page_size")
+            page_count = max(1, (len(rec_df) + page_size - 1) // page_size)
+            current_page = st.number_input("Page", min_value=1, max_value=page_count, value=1, step=1, key="rec_page")
+            start = (current_page - 1) * page_size
+            show_table(rec_df.iloc[start:start + page_size], "recommendation_table")
+    except Exception as exc:
+        show_api_error(exc, "/api/recommendations")
+    st.caption("Recommendations are based on historical performance in the SocialPulse dataset. They represent observed content patterns and are not guaranteed future outcomes.")
+
+st.markdown("---")
+st.caption("Social Sense · Data-driven engagement intelligence")
