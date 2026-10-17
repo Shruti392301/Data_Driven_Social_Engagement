@@ -139,7 +139,7 @@ To save and publish local changes:
 ```bash
 git status
 git add .
-git commit -m "Update project README"
+git commit -m "Any message to Commit"
 git push origin main
 ```
 
