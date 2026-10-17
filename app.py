@@ -155,14 +155,70 @@ def show_table(df: pd.DataFrame, key: str, height: int = 360) -> None:
 
 
 def api_options(path: str, fallback: list[str] | None = None) -> list[str]:
+    """Extract readable selectbox values from common API response shapes."""
+    endpoint = path.rstrip("/").split("/")[-1].lower()
+    if "platform" in endpoint:
+        value_keys = ("platform", "platform_name", "name", "value", "label")
+        wrapper_keys = ("platforms", "data", "items", "values", "results")
+    elif "content-type" in endpoint or "content_types" in endpoint:
+        value_keys = ("content_type", "content type", "type", "name", "value", "label")
+        wrapper_keys = ("content_types", "contentTypes", "types", "data", "items", "values", "results")
+    elif "hashtag" in endpoint:
+        value_keys = ("hashtag", "tag", "name", "value", "label")
+        wrapper_keys = ("hashtags", "data", "items", "values", "results")
+    elif "region" in endpoint:
+        value_keys = ("region", "name", "value", "label")
+        wrapper_keys = ("regions", "data", "items", "values", "results")
+    else:
+        value_keys = ("name", "value", "label")
+        wrapper_keys = ("data", "items", "values", "results")
+
+    def extract(value: Any) -> list[str]:
+        found: list[str] = []
+        if value is None:
+            return found
+        if isinstance(value, str):
+            clean = value.strip()
+            if clean:
+                found.append(clean)
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            found.append(str(value))
+        elif isinstance(value, dict):
+            normalized_keys = {
+                str(key).strip().lower().replace(" ", "_"): key for key in value
+            }
+            matched_value = False
+            for candidate in value_keys:
+                normalized_candidate = candidate.strip().lower().replace(" ", "_")
+                original_key = normalized_keys.get(normalized_candidate)
+                if original_key is not None and not isinstance(value[original_key], (dict, list)):
+                    found.extend(extract(value[original_key]))
+                    matched_value = True
+                    break
+            if not matched_value:
+                # Some endpoints wrap arrays or return mappings like {"Instagram": 1200}.
+                for candidate in wrapper_keys:
+                    original_key = normalized_keys.get(candidate.strip().lower().replace(" ", "_"))
+                    if original_key is not None:
+                        found.extend(extract(value[original_key]))
+                        matched_value = True
+                        break
+            if not matched_value:
+                for key, item in value.items():
+                    if isinstance(item, (int, float)) and not isinstance(item, bool):
+                        found.append(str(key))
+                    elif isinstance(item, (list, dict)):
+                        found.extend(extract(item))
+        elif isinstance(value, list):
+            for item in value:
+                found.extend(extract(item))
+        # Keep first-seen order and remove duplicates.
+        return list(dict.fromkeys(found))
+
     try:
-        payload = api_get(path)
-        if isinstance(payload, dict):
-            values = first_value(payload, "data", "items", "values", "platforms", "regions", "content_types", "hashtags")
-            if isinstance(values, list):
-                return [str(v) for v in values if v is not None]
-        if isinstance(payload, list):
-            return [str(v) for v in payload if v is not None]
+        values = extract(api_get(path))
+        if values:
+            return values
     except Exception:
         pass
     return fallback or []
@@ -200,7 +256,9 @@ if "socialpulse_page" not in st.session_state:
 
 
 def go_to_analyzer() -> None:
-    st.session_state.socialpulse_page = "Social Media Post Analyzer"
+    # Keep the navigation widget's keyed value in sync with the page state.
+    st.session_state["socialpulse_page"] = "Social Media Post Analyzer"
+    st.session_state["socialpulse_nav"] = "Social Media Post Analyzer"
 
 
 with st.sidebar:
@@ -240,9 +298,12 @@ if page == "Home":
         st.subheader("Your social performance, at a glance")
         st.write("Use the analytics tools to explore actual records from your configured SocialPulse API.")
   
-        if st.button("Analyze a Post", key="home_analyze_post"):
-            st.session_state.socialpulse_page = "Social Media Post Analyzer"
-            st.rerun()
+        st.button(
+            "Analyze a Post",
+            key="home_analyze_post",
+            type="primary",
+            on_click=go_to_analyzer,
+        )
 
     with right:
         st.markdown("#### Workspace")
@@ -558,86 +619,231 @@ elif page == "Audience Insights":
 
 # ---------- Content Recommendations ----------
 elif page == "Content Recommendations":
-    page_title("Content Recommendations", "Discover content patterns that have performed well historically in SocialPulse.")
+    page_title(
+        "Content Recommendations",
+        "Discover content patterns that have performed well historically in SocialPulse.",
+    )
     st.subheader("Choose Your Target")
-    try:
-        platforms = api_options("/api/platforms")
-        content_types = api_options("/api/content-types")
-        hashtags = api_options("/api/hashtags")
-    except Exception:
-        platforms, content_types, hashtags = [], [], []
-    with st.container(border=True):
-        c1, c2 = st.columns(2)
-        platform_choice = c1.selectbox("Platform", ["All"] + platforms, key="rec_platform")
-        type_choice = c2.selectbox("Content type", ["All"] + content_types, key="rec_type")
-        hashtag_choice = st.selectbox("Hashtag", ["All"] + hashtags, key="rec_hashtag")
-        target_metric = st.selectbox("Target metric", ["Virality score", "Engagement rate"], key="rec_metric")
-        apply = st.button("Generate Recommendations", type="primary")
-        reset = st.button("Reset Filters")
-        if reset:
-            for k in ("rec_platform", "rec_type", "rec_hashtag", "rec_metric"):
-                st.session_state.pop(k, None)
-            st.rerun()
-    params: dict[str, Any] = {}
-    if platform_choice != "All":
-        params["platform"] = platform_choice
-    if type_choice != "All":
-        params["content_type"] = type_choice
-    if hashtag_choice != "All":
-        params["hashtag"] = hashtag_choice
-    params["target_metric"] = "virality_score" if target_metric == "Virality score" else "engagement_rate"
 
-    st.divider()
-    st.subheader("Recommended Content Patterns")
-    try:
-        # Pass current UI filters through to the existing recommendation endpoint.
-        payload = api_get("/api/recommendations", params=params)
-        rec_df = as_frame(payload)
+    platforms = api_options(
+        "/api/platforms",
+        fallback=["Instagram", "TikTok", "YouTube", "Twitter"],
+    )
+    content_types = api_options(
+        "/api/content-types",
+        fallback=["Post", "Reel", "Story", "Stream", "Video", "Image", "Text"],
+    )
+    hashtags = api_options("/api/hashtags", fallback=[])
+
+    def reset_recommendation_filters() -> None:
+        for key in (
+            "rec_platform", "rec_type", "rec_hashtags", "rec_metric",
+            "rec_search", "rec_sort", "rec_page", "rec_page_size",
+            "rec_applied_filters", "rec_results", "rec_api_error",
+        ):
+            st.session_state.pop(key, None)
+
+    with st.container(border=True):
+        with st.form("recommendation_filter_form"):
+            c1, c2 = st.columns(2)
+            platform_choice = c1.selectbox(
+                "Platform", ["All"] + platforms, key="rec_platform",
+                help="Choose All platforms or one specific platform.",
+            )
+            type_choice = c2.selectbox(
+                "Content type", ["All"] + content_types, key="rec_type",
+                help="Choose the type of post you want to explore.",
+            )
+            hashtag_choices = st.multiselect(
+                "Hashtags", hashtags, key="rec_hashtags",
+                placeholder="Choose one or more hashtags",
+                help="Select multiple hashtags to narrow the results.",
+            )
+            target_metric = st.selectbox(
+                "Rank recommendations by",
+                ["Virality score", "Engagement rate"],
+                key="rec_metric",
+            )
+            submitted = st.form_submit_button(
+                "Generate Recommendations", type="primary", use_container_width=True
+            )
+        st.button(
+            "Reset Filters", key="reset_recommendation_filters_button",
+            on_click=reset_recommendation_filters,
+        )
+
+    if submitted:
+        request_params: dict[str, Any] = {}
+        if platform_choice != "All":
+            # The existing recommendation API supports platform filtering.
+            request_params["platform"] = platform_choice
+
+        try:
+            with st.spinner("Loading recommendations from the SocialPulse API…"):
+                payload = api_get("/api/recommendations", params=request_params)
+            raw_df = as_frame(payload)
+            st.session_state["rec_results"] = raw_df.to_dict(orient="records")
+            st.session_state["rec_api_payload"] = payload if raw_df.empty else None
+            st.session_state["rec_applied_filters"] = {
+                "platform": platform_choice,
+                "content_type": type_choice,
+                "hashtags": hashtag_choices,
+                "target_metric": target_metric,
+            }
+            st.session_state.pop("rec_api_error", None)
+            st.session_state["rec_page"] = 1
+        except requests.RequestException as exc:
+            st.session_state["rec_api_error"] = str(exc)
+            st.session_state.pop("rec_results", None)
+            st.session_state.pop("rec_applied_filters", None)
+
+    if "rec_api_error" in st.session_state:
+        st.error(f"Could not load recommendations from /api/recommendations: {st.session_state['rec_api_error']}")
+    elif "rec_applied_filters" not in st.session_state:
+        st.info("Choose your filters and click **Generate Recommendations** to load results.")
+    else:
+        applied = st.session_state["rec_applied_filters"]
+        rec_df = pd.DataFrame(st.session_state.get("rec_results", []))
+
+        st.divider()
+        st.subheader("Recommended Content Patterns")
+
         if rec_df.empty:
-            # Preserve a returned aggregate response rather than fabricating recommendation rows.
+            payload = st.session_state.get("rec_api_payload")
             if isinstance(payload, dict) and payload:
-                st.json(payload)
+                st.warning("The API returned a response, but no recommendation rows could be extracted.")
+                with st.expander("API response details"):
+                    st.json(payload)
             else:
-                st.info("No recommendations were returned for the selected filters.")
+                st.info("No recommendations were returned for the selected platform.")
         else:
-            rec_df = rec_df.drop_duplicates()
-            score_col = find_column(rec_df, ("virality_score", "avg_virality_score", "average_virality", "score"))
-            engagement_col = find_column(rec_df, ("engagement_rate", "avg_engagement_rate", "average_engagement_rate"))
-            count_col = find_column(rec_df, ("post_count", "supporting_posts", "count", "num_posts"))
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Recommendations", f"{len(rec_df):,}")
-            k2.metric("Top Virality", f"{pd.to_numeric(rec_df[score_col], errors='coerce').max():.2f}" if score_col else "Not returned")
-            k3.metric("Top Engagement", safe_pct(pd.to_numeric(rec_df[engagement_col], errors="coerce").max()) if engagement_col else "Not returned")
-            if score_col or engagement_col:
-                y = score_col if target_metric == "Virality score" and score_col else engagement_col or score_col
-                labels = [c for c in (find_column(rec_df, ("content_type", "type")), find_column(rec_df, ("hashtag", "hashtags")), find_column(rec_df, ("platform",))) if c]
-                chart_df = rec_df.copy()
-                chart_df[y] = pd.to_numeric(chart_df[y], errors="coerce")
-                chart_df = chart_df.dropna(subset=[y]).sort_values(y, ascending=False).head(15)
-                if not chart_df.empty:
-                    chart_df["Pattern"] = chart_df[labels].astype(str).agg(" · ".join, axis=1) if labels else chart_df.index.astype(str)
-                    fig = px.bar(chart_df.sort_values(y), x=y, y="Pattern", orientation="h",
-                                 title=f"Recommended patterns by {target_metric.lower()}", hover_data=list(chart_df.columns))
-                    fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=max(360, 28 * len(chart_df)))
-                    st.plotly_chart(fig, use_container_width=True)
-            st.markdown("#### Recommendation Details")
-            search = st.text_input("Search recommendations", key="rec_search")
-            if search:
-                mask = rec_df.astype(str).apply(lambda col: col.str.contains(search, case=False, na=False)).any(axis=1)
-                rec_df = rec_df[mask]
-            sort_candidates = [c for c in (score_col, engagement_col, count_col) if c and c in rec_df.columns]
-            if sort_candidates:
-                sort_by = st.selectbox("Sort recommendations by", sort_candidates, key="rec_sort")
-                rec_df[sort_by] = pd.to_numeric(rec_df[sort_by], errors="coerce")
-                rec_df = rec_df.sort_values(sort_by, ascending=False, na_position="last")
-            page_size = st.selectbox("Rows per page", [10, 25, 50], key="rec_page_size")
-            page_count = max(1, (len(rec_df) + page_size - 1) // page_size)
-            current_page = st.number_input("Page", min_value=1, max_value=page_count, value=1, step=1, key="rec_page")
-            start = (current_page - 1) * page_size
-            show_table(rec_df.iloc[start:start + page_size], "recommendation_table")
-    except Exception as exc:
-        show_api_error(exc, "/api/recommendations")
-    st.caption("Recommendations are based on historical performance in the SocialPulse dataset. They represent observed content patterns and are not guaranteed future outcomes.")
+            rec_df = rec_df.drop_duplicates().copy()
+            platform_col = find_column(rec_df, ("platform", "social_platform"))
+            type_col = find_column(rec_df, ("content_type", "type", "media_type"))
+            hashtag_col = find_column(rec_df, ("hashtag", "hashtags", "tag"))
+            virality_col = find_column(rec_df, (
+                "median_virality", "virality_score", "avg_virality_score",
+                "average_virality", "mean_virality", "virality", "viral_score", "score",
+            ))
+            engagement_col = find_column(rec_df, (
+                "median_engagement", "engagement_rate", "avg_engagement_rate",
+                "average_engagement_rate", "mean_engagement", "engagement",
+            ))
+            count_col = find_column(rec_df, (
+                "post_count", "supporting_posts", "count", "num_posts", "total_posts",
+            ))
+
+            # Apply filters locally when the recommendation endpoint does not expose
+            # content-type or hashtag query parameters.
+            if applied.get("content_type") != "All" and type_col:
+                rec_df = rec_df[
+                    rec_df[type_col].astype(str).str.casefold()
+                    == str(applied["content_type"]).casefold()
+                ]
+            selected_tags = applied.get("hashtags") or []
+            if selected_tags and hashtag_col:
+                tag_text = rec_df[hashtag_col].fillna("").astype(str).str.casefold()
+                tag_mask = pd.Series(False, index=rec_df.index)
+                for tag in selected_tags:
+                    normalized_tag = str(tag).strip().lstrip("#").casefold()
+                    tag_mask |= tag_text.str.contains(
+                        rf"(?<![A-Za-z0-9_])#?{__import__('re').escape(normalized_tag)}(?![A-Za-z0-9_])",
+                        regex=True,
+                        na=False,
+                    )
+                rec_df = rec_df[tag_mask]
+
+            # Some APIs return recommendations grouped without a platform column;
+            # the selected platform has already been applied through the API request.
+            if rec_df.empty:
+                st.info("No recommendation patterns match the selected content type and hashtag filters. Try broadening your selection.")
+            else:
+                selected_metric_col = virality_col if applied["target_metric"] == "Virality score" else engagement_col
+                if selected_metric_col is None:
+                    selected_metric_col = virality_col or engagement_col
+                if selected_metric_col:
+                    rec_df[selected_metric_col] = pd.to_numeric(rec_df[selected_metric_col], errors="coerce")
+                    rec_df = rec_df.sort_values(selected_metric_col, ascending=False, na_position="last")
+
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Recommendations", f"{len(rec_df):,}")
+                if virality_col:
+                    max_virality = pd.to_numeric(rec_df[virality_col], errors="coerce").max()
+                    k2.metric("Top Virality", f"{max_virality:.2f}" if pd.notna(max_virality) else "—")
+                else:
+                    k2.metric("Top Virality", "Not returned")
+                if engagement_col:
+                    max_engagement = pd.to_numeric(rec_df[engagement_col], errors="coerce").max()
+                    k3.metric("Top Engagement", safe_pct(max_engagement) if pd.notna(max_engagement) else "—")
+                else:
+                    k3.metric("Top Engagement", "Not returned")
+
+                st.markdown("#### Performance by Content Pattern")
+                if selected_metric_col:
+                    chart_df = rec_df.copy()
+                    chart_df = chart_df.dropna(subset=[selected_metric_col]).head(15).copy()
+                    label_cols = [
+                        col for col in (platform_col, type_col, hashtag_col)
+                        if col and col in chart_df.columns
+                    ]
+                    if not chart_df.empty:
+                        if label_cols:
+                            chart_df["Pattern"] = chart_df[label_cols].fillna("Unknown").astype(str).agg(" · ".join, axis=1)
+                        else:
+                            chart_df["Pattern"] = [f"Pattern {i + 1}" for i in range(len(chart_df))]
+                        chart_df = chart_df.sort_values(selected_metric_col, ascending=True)
+                        fig = px.bar(
+                            chart_df, x=selected_metric_col, y="Pattern", orientation="h",
+                            title=f"Top patterns by {applied['target_metric'].lower()}",
+                            hover_data=[c for c in (virality_col, engagement_col, count_col) if c and c in chart_df.columns],
+                        )
+                        fig.update_layout(
+                            template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            height=max(360, 32 * len(chart_df)),
+                            yaxis_title="Content pattern",
+                            xaxis_title=applied["target_metric"],
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info(f"The API did not return numeric values for {applied['target_metric'].lower()}.")
+                else:
+                    st.info("The recommendation response does not include a virality or engagement score to chart.")
+
+                st.markdown("#### Recommendation Details")
+                search = st.text_input("Search recommendations", key="rec_search")
+                table_df = rec_df.copy()
+                if search.strip():
+                    mask = table_df.astype(str).apply(
+                        lambda col: col.str.contains(search.strip(), case=False, na=False)
+                    ).any(axis=1)
+                    table_df = table_df[mask]
+
+                sort_candidates = [c for c in (virality_col, engagement_col, count_col) if c and c in table_df.columns]
+                if sort_candidates:
+                    default_sort = selected_metric_col if selected_metric_col in sort_candidates else sort_candidates[0]
+                    sort_by = st.selectbox(
+                        "Sort recommendations by", sort_candidates,
+                        index=sort_candidates.index(default_sort), key="rec_sort",
+                    )
+                    table_df[sort_by] = pd.to_numeric(table_df[sort_by], errors="coerce")
+                    table_df = table_df.sort_values(sort_by, ascending=False, na_position="last")
+                if not table_df.empty:
+                    table_df.insert(0, "Rank", range(1, len(table_df) + 1))
+                page_size = st.selectbox("Rows per page", [10, 25, 50], key="rec_page_size")
+                page_count = max(1, (len(table_df) + page_size - 1) // page_size)
+                current_page = st.number_input(
+                    "Page", min_value=1, max_value=page_count,
+                    value=min(int(st.session_state.get("rec_page", 1)), page_count),
+                    step=1, key="rec_page",
+                )
+                start_row = (int(current_page) - 1) * page_size
+                show_table(table_df.iloc[start_row:start_row + page_size], "recommendation_table")
+
+    st.caption(
+        "Recommendations are based on historical performance in the SocialPulse dataset. "
+        "They represent observed content patterns and are not guaranteed future outcomes."
+    )
 
 st.markdown("---")
 st.caption("Social Sense · Data-driven engagement intelligence")
